@@ -42,7 +42,7 @@ Phase 2 (inventory, customers, orders, dispatch, billing) is out of scope — ne
 - Ask, don't guess, when RCRM differs from the plan.
 
 ## Git
-`origin` = new Tulsi repo (not yet added). `rcrm-upstream` = RCRM, push URL DISABLED — never push there.
+`origin` = https://github.com/Samarth-1211/Tulsi_ERP (branch `main`). Fresh history — no RCRM remote; never push to the RCRM repo.
 Do not commit or push unless the user says so.
 
 ## Commands
