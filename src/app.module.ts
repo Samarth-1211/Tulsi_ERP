@@ -1,0 +1,37 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
+import { PrismaModule } from './prisma/prisma.module';
+import { UserDeletionModule } from './common/services/user-deletion.module';
+import { UserIntegrationModule } from './modules/user-integration/user-integration.module';
+import { LeadIngestionModule } from './modules/lead-ingestion/lead-ingestion.module';
+import { EmployeeManagementModule } from './modules/employee-management/employee-management.module';
+import { PlatformIntegrationModule } from './modules/platform_IntegrationModule/platform-integration.module';
+import { LeadAllocationAdminModule } from './modules/lead-allocation-admin/lead-allocation-admin.module';
+import { WhatsAppIntegrationModule } from './modules/whatsapp-integration/whatsapp-integration.module';
+import { TasksModule } from './modules/tasks/tasks.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { MailModule } from './modules/mail/mail.module';
+import { VerificationModule } from './modules/verification/verification.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ScheduleModule.forRoot(),
+    PrismaModule,
+    UserDeletionModule,
+    MailModule,
+    VerificationModule,
+    UserIntegrationModule,
+    LeadIngestionModule,
+    PlatformIntegrationModule,
+    EmployeeManagementModule,
+    LeadAllocationAdminModule,
+    WhatsAppIntegrationModule,
+    TasksModule,
+    NotificationsModule,
+    DashboardModule,
+  ],
+})
+export class AppModule {}
