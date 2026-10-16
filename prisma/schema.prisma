@@ -1,0 +1,1163 @@
+// Tulsi ERP — Phase 1 schema. Source of truth: docs/PHASE1_DATABASE.md §4.1.
+// Deviations from the spec text, all allowed by the spec itself:
+//  - IDs use uuid() because RCRM does (§2.10).
+//  - Notification / UserAuditLog / OrganizationAuditLog are RCRM's models (§4.1 note above Notification).
+//  - WhatsApp models are RCRM's (§4.2), with organizationId → orgId and the Project link removed.
+//  - "RCRM-kept" section: models for RCRM features retained in Phase 1 (tasks, leave, targets,
+//    employee activities, Excel lead import, email verification / password reset, web push).
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── ENUMS ─────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  CALLER
+  DELIVERY_PARTNER
+  WAREHOUSE_STAFF // reserved for Phase 2 features; can log in + attendance now
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum LeadSource {
+  WHATSAPP_CTWA // first WhatsApp message carried a Meta ad referral
+  WHATSAPP_ORGANIC // WhatsApp message without referral
+  META_LEAD_FORM
+  MANUAL
+  WALK_IN
+  REFERRAL
+  CSV_IMPORT
+  WEBSITE
+  OTHER
+}
+
+enum LeadStatus {
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  CONVERTED
+  LOST
+}
+
+enum CustomerType {
+  DEALER
+  RETAILER
+  CONTRACTOR
+  CARPENTER
+  BUILDER
+  INTERIOR_DESIGNER
+  HOMEOWNER
+  OTHER
+}
+
+enum IntegrationType {
+  WHATSAPP
+  META_LEAD_FORM
+  WEBHOOK_GENERIC // common URL for n8n / Pabbly / Zapier / website forms
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  DUPLICATE
+  FAILED
+}
+
+enum AllocationMode {
+  ROUND_ROBIN
+  MANUAL
+}
+
+enum AssignmentMethod {
+  AUTO_ROUND_ROBIN
+  MANUAL
+  SELF // caller/manager created the lead for themselves
+}
+
+enum ActivityType {
+  CREATED
+  ASSIGNED
+  REASSIGNED
+  STATUS_CHANGED
+  UPDATED
+  NOTE
+  CALL
+  WHATSAPP
+  FOLLOW_UP
+  RE_ENQUIRY
+  DELETED
+}
+
+enum FollowUpStatus {
+  PENDING
+  DONE
+  MISSED
+  CANCELLED
+}
+
+enum AttendanceStatus {
+  CHECKED_IN
+  CHECKED_OUT
+  ABSENT
+}
+
+// ── RCRM enums kept with their models ──
+
+enum NotificationType {
+  TASK_REMINDER
+  TASK_ASSIGNED
+  GENERIC
+  // A new lead was saved (any channel) — sent to the org's Admins and Managers.
+  LEAD_CAPTURED
+  // A lead was allocated to this user — auto, manual (re)assignment, or a lost-lead reshuffle.
+  LEAD_ASSIGNED
+  // A lead's details were edited — sent to the org's Admins (and the lead's assignee).
+  LEAD_UPDATED
+  // A lead was deleted — sent to the org's Admins (and its assignee) with a snapshot of what was removed.
+  LEAD_DELETED
+}
+
+enum UserAuditAction {
+  ADMIN_CREATED
+  ADMIN_DELETED
+  ADMIN_DEACTIVATED
+  ADMIN_REACTIVATED
+  PASSWORD_RESET
+}
+
+enum OrganizationAuditAction {
+  ORG_CREATED
+  ORG_UPDATED
+  ORG_SUSPENDED
+  ORG_REACTIVATED
+  ORG_ARCHIVED
+}
+
+enum VerificationTokenType {
+  ORG_ADMIN_VERIFY
+  USER_VERIFY
+}
+
+enum EmployeeActivityType {
+  CALL
+  WHATSAPP
+  MEETING
+  SITE_VISIT
+  TRAVEL
+  FOLLOW_UP
+  NOTE
+  DOCUMENTATION
+  PAYMENT
+  MARKETING
+  REPORTING
+  INTERNAL_MEETING
+  TRAINING
+  OTHER
+}
+
+enum TaskType {
+  FOLLOW_UP
+  SITE_VISIT
+  CALL
+  MEETING
+  OTHER
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+// Declaration order matters: it defines the native Postgres enum ordinal, so
+// `orderBy: { priority: 'desc' }` naturally sorts TOP_PRIORITY first without
+// a separate numeric rank column.
+enum TaskPriority {
+  NORMAL
+  URGENT
+  VERY_URGENT
+  TOP_PRIORITY
+}
+
+enum LeadImportStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// Who the uploader chose to share a lead sheet with.
+//  ALL_TEAMS           every Manager's caller team
+//  MANAGERS_AND_TEAMS  the picked Managers, each sharing their part with their team
+//  MANAGERS_ONLY       the picked Managers themselves
+//  CUSTOM              people the uploader named, each with their own number of leads
+enum LeadImportAllocationMode {
+  ALL_TEAMS
+  MANAGERS_AND_TEAMS
+  MANAGERS_ONLY
+  CUSTOM
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum TargetMetric {
+  CALLS
+  CONVERSIONS
+}
+
+enum WhatsAppIntegrationStatus {
+  PENDING
+  CONNECTED
+  FAILED
+  DISABLED
+}
+
+enum WhatsAppMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum WhatsAppMessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum WhatsAppWebhookEventStatus {
+  PENDING
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+// ─────────────────── TENANCY & SETTINGS ───────────────────
+
+model Organization {
+  id           String   @id @default(uuid())
+  name         String
+  slug         String   @unique
+  industryType String   @default("PLYWOOD_WHOLESALE")
+  gstin        String?
+  phone        String?
+  email        String?
+  address      String?
+  city         String?
+  state        String?
+  isDemo       Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // RCRM-kept: org stays pending until its first admin verifies by email.
+  // Suspended = isActive false; archived = isActive false + archivedAt.
+  isVerified      Boolean   @default(false)
+  verifiedAt      DateTime?
+  suspendedAt     DateTime?
+  suspendedReason String?
+  archivedAt      DateTime?
+
+  settings      OrgSettings?
+  users         User[]
+  leads         Lead[]
+  integrations  Integration[]
+  webhookEvents WebhookEvent[]
+  attendance    Attendance[]
+  assignments   LeadAssignment[]
+  activities    LeadActivityLog[]
+  followUps     FollowUp[]
+  notifications Notification[]
+  auditLogs     OrganizationAuditLog[]
+
+  whatsappIntegration   WhatsAppIntegration?
+  whatsappMessages      WhatsAppMessage[]
+  whatsappWebhookEvents WhatsAppWebhookEvent[]
+  whatsappAdSources     WhatsAppAdSource[]
+
+  leadImportBatches  LeadImportBatch[]
+  leaveRequests      LeaveRequest[]
+  targets            Target[]
+  employeeActivities EmployeeActivity[]
+  tasks              Task[]
+  verificationTokens VerificationToken[]
+}
+
+model OrgSettings {
+  id                       String         @id @default(uuid())
+  orgId                    String         @unique
+  allocationMode           AllocationMode @default(ROUND_ROBIN)
+  allocationTargetRole     Role           @default(MANAGER) // switch to CALLER later
+  allocateOnlyCheckedIn    Boolean        @default(false) // only users checked in today
+  checkoutSummaryMinLength Int            @default(20)
+  timezone                 String         @default("Asia/Kolkata")
+  // RCRM-kept: reassign a lead to someone else the instant it is marked LOST.
+  autoReallocateLostLeads  Boolean        @default(false)
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────── USERS & AUTH ───────────────────────
+
+model User {
+  id                 String     @id @default(uuid())
+  orgId              String? // null only for SUPER_ADMIN
+  name               String
+  email              String     @unique
+  phone              String?
+  passwordHash       String
+  role               Role
+  status             UserStatus @default(ACTIVE)
+  employeeCode       String?
+  managerId          String?
+  createdById        String?
+  lastLeadAssignedAt DateTime? // round-robin cursor
+  lastLoginAt        DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  // RCRM-kept: email-verified invites, temp passwords, profile photo,
+  // and the "new leads" dot on the Leads nav item.
+  isVerified          Boolean   @default(true)
+  verifiedAt          DateTime?
+  isTemporaryPassword Boolean   @default(false)
+  photoUrl            String?
+  leadsSeenAt         DateTime  @default(now())
+
+  org          Organization? @relation(fields: [orgId], references: [id])
+  manager      User?         @relation("ManagerTeam", fields: [managerId], references: [id])
+  team         User[]        @relation("ManagerTeam")
+  createdBy    User?         @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers User[]        @relation("UserCreatedBy")
+
+  refreshTokens   RefreshToken[]
+  attendance      Attendance[]
+  assignedLeads   Lead[]            @relation("LeadAssignee")
+  createdLeads    Lead[]            @relation("LeadCreator")
+  assignmentsFrom LeadAssignment[]  @relation("AssignmentFrom")
+  assignmentsTo   LeadAssignment[]  @relation("AssignmentTo")
+  assignmentsBy   LeadAssignment[]  @relation("AssignmentBy")
+  activities      LeadActivityLog[]
+  followUps       FollowUp[]
+  notifications   Notification[]
+
+  auditLogsPerformed    UserAuditLog[]         @relation("AuditPerformedBy")
+  auditLogsAsTarget     UserAuditLog[]         @relation("AuditTargetUser")
+  orgAuditLogsPerformed OrganizationAuditLog[] @relation("OrgAuditPerformedBy")
+
+  whatsappMessagesSent    WhatsAppMessage[]    @relation("WhatsAppMessageSentBy")
+  whatsappThreadReads     WhatsAppThreadRead[]
+  whatsappAdSourcesMapped WhatsAppAdSource[]   @relation("WhatsAppAdSourceMappedBy")
+
+  leadImports              LeadImportBatch[]        @relation("LeadImportUploadedBy")
+  leadImportCollaborations LeadImportCollaborator[] @relation("LeadImportCollaborations")
+  leaveRequests            LeaveRequest[]           @relation("LeaveApplicant")
+  leaveReviews             LeaveRequest[]           @relation("LeaveReviewer")
+  targets                  Target[]                 @relation("TargetEmployee")
+  targetsSet               Target[]                 @relation("TargetSetBy")
+  employeeActivities       EmployeeActivity[]
+  tasksOwned               Task[]                   @relation("TaskOwner")
+  tasksCreated             Task[]                   @relation("TaskCreatedBy")
+  verificationTokens       VerificationToken[]
+  passwordResetOtps        PasswordResetOtp[]
+  pushSubscriptions        PushSubscription[]
+
+  @@unique([orgId, employeeCode])
+  @@index([orgId, role, status])
+  @@index([managerId])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────── ATTENDANCE ───────────────────────
+
+model Attendance {
+  id            String           @id @default(uuid())
+  orgId         String
+  userId        String
+  date          DateTime         @db.Date // org-local calendar day
+  checkInAt     DateTime
+  checkInLat    Float?
+  checkInLng    Float?
+  checkOutAt    DateTime?
+  checkOutLat   Float?
+  checkOutLng   Float?
+  summary       String? // REQUIRED by the service at checkout (min length from OrgSettings)
+  workedMinutes Int?
+  status        AttendanceStatus @default(CHECKED_IN)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@index([orgId, date])
+}
+
+// ─────────────────── INTEGRATIONS & WEBHOOKS ───────────────────
+
+model Integration {
+  id                String            @id @default(uuid())
+  orgId             String
+  type              IntegrationType
+  name              String
+  status            IntegrationStatus @default(ACTIVE)
+  webhookToken      String            @unique // used in common URL: /webhooks/leads/:webhookToken
+  verifyToken       String? // Meta hub.verify_token (native webhooks)
+  externalAccountId String? // Meta page_id (forms) or WhatsApp phone_number_id — used to route native webhooks to an org
+  config            Json? // { formIds: [], wabaId, displayPhone, fieldMapping: {...} }
+  encryptedSecrets  String? // page access token / WABA token, encrypted with RCRM's crypto util
+  lastEventAt       DateTime?
+  createdById       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  org           Organization   @relation(fields: [orgId], references: [id])
+  leads         Lead[]
+  webhookEvents WebhookEvent[]
+
+  @@index([orgId, type])
+  @@index([type, externalAccountId])
+}
+
+model WebhookEvent {
+  id            String             @id @default(uuid())
+  orgId         String?
+  integrationId String?
+  source        IntegrationType
+  externalId    String? // leadgen_id | wamid | payload id
+  payload       Json
+  status        WebhookEventStatus @default(RECEIVED)
+  error         String?
+  leadId        String?
+  receivedAt    DateTime           @default(now())
+  processedAt   DateTime?
+
+  org         Organization? @relation(fields: [orgId], references: [id])
+  integration Integration?  @relation(fields: [integrationId], references: [id])
+  lead        Lead?         @relation(fields: [leadId], references: [id])
+
+  @@unique([source, externalId])
+  @@index([orgId, status])
+}
+
+// ─────────────────────────── LEADS ───────────────────────────
+
+model Lead {
+  id               String        @id @default(uuid())
+  orgId            String
+  name             String?
+  phone            String // E.164
+  altPhone         String?
+  email            String?
+  city             String?
+  pincode          String?
+  address          String?
+  customerType     CustomerType?
+  requirementNotes String? // e.g. "18mm BWP 8x4, 40 sheets" — structured requirements come in Phase 2
+  estimatedValue   Decimal?      @db.Decimal(12, 2)
+  source           LeadSource
+  integrationId    String?
+  sourceLeadId     String? // Meta leadgen_id or first wamid
+  status           LeadStatus    @default(NEW)
+  assignedToId     String?
+  assignedAt       DateTime?
+  createdById      String?
+  lostReason       String?
+  convertedAt      DateTime?
+  firstResponseAt  DateTime?
+  lastActivityAt   DateTime?
+  nextFollowUpAt   DateTime?
+  customFields     Json? // extra form answers
+  rawPayload       Json?
+  previousLeadId   String?
+  deletedAt        DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  // RCRM-kept: the Click-to-WhatsApp ad of the first message, and the Excel upload a lead came from.
+  adSourceId    String?
+  importBatchId String?
+
+  org          Organization      @relation(fields: [orgId], references: [id])
+  integration  Integration?      @relation(fields: [integrationId], references: [id])
+  assignedTo   User?             @relation("LeadAssignee", fields: [assignedToId], references: [id])
+  createdBy    User?             @relation("LeadCreator", fields: [createdById], references: [id])
+  previousLead Lead?             @relation("LeadHistory", fields: [previousLeadId], references: [id])
+  laterLeads   Lead[]            @relation("LeadHistory")
+  adSource     WhatsAppAdSource? @relation(fields: [adSourceId], references: [id], onDelete: SetNull)
+  importBatch  LeadImportBatch?  @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+
+  attribution   LeadAdAttribution?
+  assignments   LeadAssignment[]
+  activities    LeadActivityLog[]
+  followUps     FollowUp[]
+  webhookEvents WebhookEvent[]
+  notifications Notification[]
+
+  whatsappMessages   WhatsAppMessage[]
+  whatsappReads      WhatsAppThreadRead[]
+  employeeActivities EmployeeActivity[]
+  tasks              Task[]
+
+  @@unique([orgId, source, sourceLeadId])
+  @@index([orgId, status])
+  @@index([orgId, assignedToId])
+  @@index([orgId, phone])
+  @@index([orgId, createdAt])
+  @@index([adSourceId])
+  @@index([importBatchId])
+}
+
+model LeadAdAttribution {
+  id           String   @id @default(uuid())
+  leadId       String   @unique
+  platform     String   @default("META")
+  campaignId   String?
+  campaignName String?
+  adsetId      String?
+  adsetName    String?
+  adId         String? // CTWA: referral.source_id
+  adName       String?
+  formId       String?
+  formName     String?
+  pageId       String?
+  ctwaClid     String? // CTWA click id — absent for WhatsApp Status ads
+  sourceType   String? // "ad" | "post"
+  sourceUrl    String?
+  headline     String?
+  body         String?
+  mediaType    String? // image | video
+  imageUrl     String?
+  videoUrl     String?
+  thumbnailUrl String?
+  raw          Json?
+  createdAt    DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([adId])
+  @@index([campaignId])
+}
+
+model LeadAssignment {
+  id           String           @id @default(uuid())
+  orgId        String
+  leadId       String
+  fromUserId   String?
+  toUserId     String
+  method       AssignmentMethod
+  assignedById String? // null when system
+  reason       String?
+  createdAt    DateTime         @default(now())
+
+  org        Organization @relation(fields: [orgId], references: [id])
+  lead       Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fromUser   User?        @relation("AssignmentFrom", fields: [fromUserId], references: [id])
+  toUser     User         @relation("AssignmentTo", fields: [toUserId], references: [id])
+  assignedBy User?        @relation("AssignmentBy", fields: [assignedById], references: [id])
+
+  @@index([leadId])
+  @@index([orgId, toUserId, createdAt])
+}
+
+model LeadActivityLog {
+  id        String       @id @default(uuid())
+  orgId     String
+  leadId    String
+  userId    String? // null = system
+  type      ActivityType
+  message   String?
+  meta      Json? // { from: "NEW", to: "ASSIGNED" } etc.
+  createdAt DateTime     @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  lead Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User?        @relation(fields: [userId], references: [id])
+
+  @@index([leadId, createdAt])
+}
+
+model FollowUp {
+  id             String         @id @default(uuid())
+  orgId          String
+  leadId         String
+  userId         String
+  note           String
+  outcome        String?
+  nextFollowUpAt DateTime?
+  status         FollowUpStatus @default(PENDING)
+  completedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  lead Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id])
+
+  @@index([orgId, userId, nextFollowUpAt])
+  @@index([leadId])
+}
+
+// ─────────────────── NOTIFICATIONS & AUDIT (RCRM's models) ───────────────────
+
+// In-app notification shown to a user: task reminders (created by the cron
+// job in NotificationsService when a TaskReminder fires) and assignments,
+// lead capture/allocation (LeadNotificationsService), and GENERIC one-offs.
+// taskId / leadId point the bell at what the notification is about.
+model Notification {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  type    NotificationType @default(TASK_REMINDER)
+  title   String
+  message String
+
+  taskId String?
+  task   Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  isRead Boolean @default(false)
+
+  // When the push dispatcher picked this notification up (sent to the user's
+  // subscribed devices, or skipped as stale). Null = not dispatched yet.
+  pushedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead, createdAt])
+  @@index([pushedAt, createdAt])
+  @@index([taskId])
+  @@index([leadId])
+  @@map("notifications")
+}
+
+model UserAuditLog {
+  id String @id @default(uuid())
+
+  action UserAuditAction
+
+  performedById String
+  performedBy   User   @relation("AuditPerformedBy", fields: [performedById], references: [id])
+
+  targetUserId String
+  targetUser   User   @relation("AuditTargetUser", fields: [targetUserId], references: [id])
+
+  reason   String?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([performedById])
+  @@index([targetUserId])
+  @@map("user_audit_logs")
+}
+
+model OrganizationAuditLog {
+  id String @id @default(uuid())
+
+  action OrganizationAuditAction
+
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  performedById String
+  performedBy   User   @relation("OrgAuditPerformedBy", fields: [performedById], references: [id])
+
+  reason   String?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([orgId])
+  @@index([performedById])
+  @@map("organization_audit_logs")
+}
+
+// ─────────────────── WHATSAPP (copied from RCRM) ───────────────────
+// RCRM has no separate conversation model: a lead IS the WhatsApp thread
+// (messages carry leadId; the thread's assignee is the lead's assignee).
+// The raw inbound message — including Meta's `referral` object for CTWA —
+// is kept in WhatsAppMessage.rawPayload.
+
+// One connected WhatsApp Business Account (WABA) + phone number per
+// organization. Mirrors PlatformIntegration's webhook-token pattern, but
+// carries actual Meta API credentials (accessToken, encrypted at rest) since
+// this integration also sends messages, not just receives webhooks.
+model WhatsAppIntegration {
+  id    String       @id @default(uuid())
+  orgId String       @unique
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  wabaId             String
+  phoneNumberId      String  @unique
+  displayPhoneNumber String?
+  businessName       String?
+  businessManagerId  String?
+
+  // AES-256-GCM ciphertext (iv + authTag + ciphertext, base64), never
+  // returned by any API response. See EncryptionService.
+  accessTokenEncrypted String
+  // The Meta app's App Secret, same encryption — used to check the
+  // X-Hub-Signature-256 header on every webhook POST. Optional: when unset,
+  // the app-wide META_APP_SECRET env var is used instead.
+  appSecretEncrypted   String?
+
+  // Unique per-org path segment for the webhook URL — an opaque random
+  // token, not the orgId itself, so the callback URL alone can't
+  // be used to enumerate/target a specific org.
+  webhookSlug String @unique @default(uuid())
+  // Pasted into Meta's webhook config screen; Meta echoes it back on the
+  // GET verification handshake so we can confirm the callback is genuine.
+  verifyToken String @default(uuid())
+
+  status     WhatsAppIntegrationStatus @default(PENDING)
+  verifiedAt DateTime?
+  lastError  String?
+
+  lastInboundAt  DateTime?
+  lastOutboundAt DateTime?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages      WhatsAppMessage[]
+  webhookEvents WhatsAppWebhookEvent[]
+
+  @@map("whatsapp_integrations")
+}
+
+// Full inbound/outbound WhatsApp message log, tied to the Lead it belongs
+// to. Powers the chat UI on the lead detail screen and the 24-hour
+// customer-service-window check before sending free-form replies.
+model WhatsAppMessage {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  integrationId String
+  integration   WhatsAppIntegration @relation(fields: [integrationId], references: [id])
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  // Meta's message id — used to dedupe inbound webhook retries and to
+  // correlate later status callbacks (sent/delivered/read/failed) back to
+  // this row.
+  waMessageId String? @unique
+
+  direction WhatsAppMessageDirection
+  fromPhone String
+  toPhone   String
+
+  // "text" | "image" | "document" | "audio" | "video" | "location" | "sticker" | ...
+  messageType     String  @default("text")
+  textBody        String?
+  mediaId         String?
+  mediaMimeType   String?
+  // Inbound media copied to our own storage (UPLOADS_DIR/whatsapp-media) —
+  // Meta's download URLs expire within minutes, so the file is fetched once
+  // when the webhook is processed. mediaError holds why that failed.
+  mediaStorageKey String?
+  mediaFileName   String?
+  mediaSize       Int?
+  mediaError      String?
+
+  // The business phone_number_id the message came in on / went out from
+  // (webhook value.metadata.phone_number_id for inbound).
+  phoneNumberId String?
+  // The message object exactly as Meta sent it (inbound only).
+  rawPayload    Json?
+
+  status       WhatsAppMessageStatus @default(SENT)
+  errorCode    String?
+  errorMessage String?
+
+  // Set for OUTBOUND messages sent by a CRM user from the chat UI; null for
+  // INBOUND and for any future automated/template sends.
+  sentByUserId String?
+  sentByUser   User?   @relation("WhatsAppMessageSentBy", fields: [sentByUserId], references: [id])
+
+  waTimestamp DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([orgId, leadId])
+  @@index([leadId, createdAt])
+  @@index([integrationId])
+  @@map("whatsapp_messages")
+}
+
+// Every POST Meta makes to the WhatsApp webhook, stored raw before any
+// processing — the audit trail behind the WhatsApp Debug Console. Rows older
+// than WHATSAPP_WEBHOOK_EVENT_RETENTION_DAYS (default 14) are purged daily.
+model WhatsAppWebhookEvent {
+  id            String              @id @default(uuid())
+  orgId         String
+  org           Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  integrationId String
+  integration   WhatsAppIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  receivedAt     DateTime @default(now())
+  // true = X-Hub-Signature-256 matched, false = it didn't (request rejected
+  // with 401), null = not checked because no App Secret is configured.
+  signatureValid Boolean?
+  object         String?
+  phoneNumberId  String?
+  // "messages" | "statuses" | "messages+statuses" | "other"
+  eventType      String
+  rawPayload     Json
+
+  processingStatus WhatsAppWebhookEventStatus @default(PENDING)
+  errorMessage     String?
+  processedAt      DateTime?
+
+  @@index([orgId, receivedAt])
+  @@index([processingStatus, receivedAt])
+  @@map("whatsapp_webhook_events")
+}
+
+// One Meta ad (or boosted post) that has sent the organization a
+// Click-to-WhatsApp lead, as reported in the first message's `referral` block.
+model WhatsAppAdSource {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Meta's ad / post id (referral.source_id).
+  adId       String
+  // "ad" | "post"
+  sourceType String  @default("ad")
+  // As last seen — an ad's copy can be edited while it runs.
+  headline   String?
+  body       String?
+  sourceUrl  String?
+
+  mappedById String?
+  mappedBy   User?     @relation("WhatsAppAdSourceMappedBy", fields: [mappedById], references: [id], onDelete: SetNull)
+  mappedAt   DateTime?
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  leads Lead[]
+
+  @@unique([orgId, adId])
+  @@map("whatsapp_ad_sources")
+}
+
+// When a user last opened a lead's WhatsApp thread — inbound messages newer
+// than this count as unread for that user in the inbox.
+model WhatsAppThreadRead {
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leadId     String
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime @default(now())
+
+  @@id([userId, leadId])
+  @@index([leadId])
+  @@map("whatsapp_thread_reads")
+}
+
+// ─────────────────── RCRM-KEPT FEATURES (not in the Phase 1 spec) ───────────────────
+
+// Backs both the org-admin "verify your organization" email link and the
+// team-member/manager "verify your account" invite link — both ultimately
+// verify a User; orgId is only set (and only acted on) for ORG_ADMIN_VERIFY
+// tokens, where consuming it also marks the Organization verified.
+model VerificationToken {
+  id   String                @id @default(uuid())
+  type VerificationTokenType
+
+  tokenHash String @unique
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  orgId String?
+  org   Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([orgId])
+  @@map("verification_tokens")
+}
+
+// Short-lived OTP for the "forgot password" flow, requested while logged out.
+model PasswordResetOtp {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  otpHash    String
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("password_reset_otps")
+}
+
+// One browser/device a user turned push notifications on for (Web Push API).
+model PushSubscription {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  endpoint  String  @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// One Excel/CSV upload of leads. The file is parsed up front, then its rows
+// are imported in the background while the uploader's screen polls
+// processedRows / totalRows for the progress bar.
+model LeadImportBatch {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  uploadedById String
+  uploadedBy   User   @relation("LeadImportUploadedBy", fields: [uploadedById], references: [id])
+
+  fileName String
+  status   LeadImportStatus @default(PROCESSING)
+
+  totalRows      Int
+  processedRows  Int @default(0)
+  createdCount   Int @default(0)
+  duplicateCount Int @default(0)
+  failedCount    Int @default(0)
+
+  // Rows that weren't imported, then rows with a value dropped: [{ row, message, level }].
+  issues         Json?
+  // Leads per assignee: [{ userId, name, managerId, managerName, count }].
+  allocation     Json?
+  // Sheet columns that don't map to a lead field and were skipped.
+  ignoredColumns String[]
+  error          String?
+
+  // The sheet exactly as uploaded, kept on disk under UPLOADS_DIR/lead-imports.
+  fileStorageKey String?
+  fileMimeType   String?
+  fileSizeBytes  Int?
+
+  allocationMode LeadImportAllocationMode?
+
+  leads         Lead[]
+  collaborators LeadImportCollaborator[]
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([orgId, createdAt])
+  @@index([status])
+  @@map("lead_import_batches")
+}
+
+model LeadImportCollaborator {
+  batchId String
+  batch   LeadImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  managerId String
+  manager   User   @relation("LeadImportCollaborations", fields: [managerId], references: [id])
+
+  @@id([batchId, managerId])
+  @@index([managerId])
+  @@map("lead_import_collaborators")
+}
+
+model LeaveRequest {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  userId String
+  user   User   @relation("LeaveApplicant", fields: [userId], references: [id])
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  reason    String
+
+  status LeaveStatus @default(PENDING)
+
+  reviewedById  String?
+  reviewedBy    User?     @relation("LeaveReviewer", fields: [reviewedById], references: [id])
+  reviewedAt    DateTime?
+  reviewComment String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, status])
+  @@index([userId])
+  @@map("leave_requests")
+}
+
+model Target {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  userId String
+  user   User   @relation("TargetEmployee", fields: [userId], references: [id])
+
+  periodYear  Int
+  periodMonth Int
+
+  metric      TargetMetric
+  targetValue Int
+
+  setById String
+  setBy   User   @relation("TargetSetBy", fields: [setById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, periodYear, periodMonth])
+  @@index([orgId, periodYear, periodMonth])
+  @@map("targets")
+}
+
+// One "what did I do today" entry, logged by the employee themselves after check-in.
+model EmployeeActivity {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  type        EmployeeActivityType
+  description String?
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([orgId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([leadId])
+  @@map("employee_activities")
+}
+
+// A personal to-do item, optionally tied to a specific lead. Owned by one user;
+// reminders are driven by TaskReminder rows generated from `dueAt` + offsets.
+model Task {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  userId String
+  user   User   @relation("TaskOwner", fields: [userId], references: [id])
+
+  title       String
+  description String?
+  taskType    TaskType?
+  priority    TaskPriority @default(NORMAL)
+  dueAt       DateTime?
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  status      TaskStatus @default(PENDING)
+  completedAt DateTime?
+
+  // Who created/assigned this task. Equal to `userId` for a self-created
+  // personal to-do; different when a Manager/Admin assigns it to their team.
+  createdById String
+  createdBy   User   @relation("TaskCreatedBy", fields: [createdById], references: [id])
+
+  reminders     TaskReminder[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([userId, status, dueAt])
+  @@index([createdById, userId])
+  @@index([leadId])
+  @@map("tasks")
+}
+
+// One scheduled reminder for a Task, fired by NotificationsService's cron job.
+model TaskReminder {
+  id     String @id @default(uuid())
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  offsetMinutes Int
+  remindAt      DateTime
+  firedAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([remindAt, firedAt])
+  @@index([taskId])
+  @@map("task_reminders")
+}
