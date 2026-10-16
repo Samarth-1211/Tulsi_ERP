@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+*.zip
+
+# Rendered email previews, generated for local review only
+email-previews
+
+# Uploaded project brochures (UPLOADS_DIR) — runtime data, not source
+uploads
