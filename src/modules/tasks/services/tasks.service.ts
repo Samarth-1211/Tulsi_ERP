@@ -11,7 +11,7 @@ import { TaskQueryDto, TaskSourceFilter } from '../dto/task-query.dto';
 const DEFAULT_REMINDER_OFFSETS_MINUTES = [1440, 360];
 
 const TASK_INCLUDE = {
-  lead: { select: { id: true, fullName: true, phone: true } },
+  lead: { select: { id: true, name: true, phone: true } },
   user: { select: { id: true, name: true, role: true } },
   createdBy: { select: { id: true, name: true, role: true } },
 } as const;

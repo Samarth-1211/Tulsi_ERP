@@ -298,6 +298,9 @@ model Organization {
   whatsappWebhookEvents WhatsAppWebhookEvent[]
   whatsappAdSources     WhatsAppAdSource[]
 
+  products       Product[]
+  stockMovements StockMovement[]
+
   leadImportBatches  LeadImportBatch[]
   leaveRequests      LeaveRequest[]
   targets            Target[]
@@ -1160,4 +1163,59 @@ model TaskReminder {
   @@index([remindAt, firedAt])
   @@index([taskId])
   @@map("task_reminders")
+}
+
+// ───────────────────────── INVENTORY ─────────────────────────
+// Product catalogue + stock per organization. Added manually or from an Excel sheet
+// (upsert by SKU). Every stock change is recorded in StockMovement.
+
+model Product {
+  id    String       @id @default(uuid())
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id])
+
+  name         String
+  sku          String? // unique per org when present
+  category     String  @default("PLYWOOD") // PLYWOOD, LAMINATE, BLOCKBOARD, MDF, HDHMR, VENEER, DOOR, HARDWARE, OTHER
+  brand        String?
+  grade        String? // MR, BWR, BWP, Marine, Commercial…
+  thickness    String? // e.g. "18mm"
+  size         String? // e.g. "8x4 ft"
+  unit         String  @default("SHEET") // SHEET, PIECE, BOX, SQFT, KG
+  price        Decimal @default(0) @db.Decimal(12, 2) // selling price per unit
+  costPrice    Decimal? @db.Decimal(12, 2)
+  stock        Int     @default(0)
+  reorderLevel Int     @default(0) // low-stock alert at or below this
+  description  String?
+  isActive     Boolean @default(true)
+
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  movements StockMovement[]
+
+  @@unique([orgId, sku])
+  @@index([orgId, category])
+  @@index([orgId, deletedAt])
+  @@map("products")
+}
+
+model StockMovement {
+  id        String       @id @default(uuid())
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id])
+  productId String
+  product   Product      @relation(fields: [productId], references: [id])
+
+  change       Int // + received / - dispatched or corrected
+  balanceAfter Int
+  reason       String? // RECEIVED, SOLD, DAMAGED, CORRECTION, IMPORT, CREATED…
+  note         String?
+  userId       String?
+  createdAt    DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@map("stock_movements")
 }

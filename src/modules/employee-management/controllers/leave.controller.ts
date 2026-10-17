@@ -45,7 +45,7 @@ export class LeaveController {
 
   @Patch(':id/approve')
   @Roles(Role.MANAGER, Role.ADMIN, Role.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Approve a leave request; backfills attendance as On-Leave for the requested dates' })
+  @ApiOperation({ summary: 'Approve a leave request (leave days block check-in; reports show them as leave, not absence)' })
   approve(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string, @Body() dto: ReviewLeaveDto) {
     return this.leaveService.approve(actor, id, dto);
   }

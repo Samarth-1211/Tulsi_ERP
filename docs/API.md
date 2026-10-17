@@ -436,7 +436,31 @@ A first message from a new number (or a fresh ad tap) goes through `ingest()`: w
 
 Lead events are delivered the RCRM way — notification rows (bell) + web push, no socket: new lead → org Admins + the assignee's Manager (`LEAD_CAPTURED`) and the assignee (`LEAD_ASSIGNED`); reassignment → new assignee; field edits → Admins + assignee + their Manager (`LEAD_UPDATED`); re-enquiry and manager notes → assignee.
 
-## 12. Seeded accounts (`npx prisma db seed`)
+## 12. Inventory (products + stock)
+
+Tables `products` and `stock_movements` (migration `inventory_products`). Read: every org role. Write: ADMIN, MANAGER, WAREHOUSE_STAFF. Delete: ADMIN, MANAGER.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/inventory/products?search&category&lowStock=true&page&pageSize` | List, paginated `{ items, total, page, pageSize }` |
+| `GET` | `/inventory/summary` | `{ totalProducts, totalUnits, stockValue, lowStock, outOfStock, byCategory }` |
+| `GET` | `/inventory/products/:id` | One product + last 20 stock movements |
+| `POST` | `/inventory/products` | Create (optional opening `stock` → `CREATED` movement) |
+| `PATCH` | `/inventory/products/:id` | Edit details (not stock) |
+| `PATCH` | `/inventory/products/:id/stock` | `{ change: ±n, reason: RECEIVED\|SOLD\|RETURNED\|DAMAGED\|CORRECTION, note? }` — stock never goes below 0 |
+| `DELETE` | `/inventory/products/:id` | Soft delete, body `{ "confirmation": "delete" }` (frees the SKU) |
+| `GET` | `/inventory/import/template` | Excel template |
+| `POST` | `/inventory/import` | Multipart `file` (.xlsx/.csv, ≤ 5 MB) → `{ totalRows, created, updated, failed, issues[] }` — matched by SKU: new SKUs are created, existing ones updated |
+
+```json
+POST /inventory/products
+{ "name": "Century Club Prime BWP 18mm", "sku": "CEN-BWP-18", "category": "PLYWOOD", "brand": "Century", "grade": "BWP",
+  "thickness": "18mm", "size": "8x4 ft", "unit": "SHEET", "price": 3650, "costPrice": 3100, "stock": 120, "reorderLevel": 20 }
+```
+
+`category`: PLYWOOD, LAMINATE, BLOCKBOARD, MDF, HDHMR, VENEER, DOOR, HARDWARE, OTHER · `unit`: SHEET, PIECE, BOX, SQFT, KG.
+
+## 13. Seeded accounts (`npx prisma db seed`)
 
 Password: `SEED_DEFAULT_PASSWORD` or `Demo@1234`.
 

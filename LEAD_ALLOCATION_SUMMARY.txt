@@ -1,0 +1,218 @@
+LEAD ALLOCATION SYSTEM - WORK SUMMARY
+Date: 2026-09-15
+Module: src/modules/lead-ingestion
+
+============================================================
+1. WHAT WAS FOUND BEFORE ANY CHANGES
+============================================================
+
+The database schema (prisma/schema.prisma) already had infrastructure built
+for org-wide / project-wise round-robin allocation, but the code never used
+most of it:
+
+  - Organization.leadAllocationMode  (enum: ORG_WIDE | PROJECT_WISE) -> existed, unused.
+  - ProjectPresales                  (maps which presales users are tied to
+                                       which project) -> existed, unused.
+  - LeadAllocationState              (stores lastAssignedUserId per
+                                       organizationId + projectId, the classic
+                                       "cursor" for a round-robin) -> existed, unused.
+
+The actual LeadAllocationService instead implemented a "least-loaded" pick
+(whoever has the fewest open ASSIGNED/IN_PROGRESS leads), which is a
+different algorithm from round-robin, and it ignored project context and the
+leadAllocationMode setting entirely.
+
+More importantly: LeadAllocationService.selectAssignee() was called from:
+  - LeadsService.createManual()      (manual lead entry by staff)
+  - LeadsService.ingestFromPortal()  (a secondary/legacy portal-ingest path)
+
+...but NOT from LeadsWebhookService.ingest(), which is the real endpoint hit
+by external platforms (99acres, Housing.com, NoBroker, etc. via
+POST /webhooks/leads/:token). This means every real inbound webhook lead was
+being saved with assignedToId = null and left in NEW status forever, with no
+automatic allocation at all.
+
+Two smaller gaps were also found:
+  - Lead.assignedAt was never being set anywhere assignedToId was set
+    (createManual, ingestFromPortal, and the manual assign() endpoint), even
+    though the schema has this field.
+  - Manually-created leads (createManual) had no way to be tagged with a
+    projectId at all, so they could never participate in project-wise
+    allocation.
+
+============================================================
+2. DECISIONS CONFIRMED WITH THE USER BEFORE IMPLEMENTING
+============================================================
+
+Q1. Algorithm: True round-robin (persisted cursor), not least-loaded.
+    -> Chosen. Implemented using LeadAllocationState as a rotating cursor.
+
+Q2. Allocation scope: Respect Organization.leadAllocationMode per org.
+    -> Chosen. ORG_WIDE orgs rotate the whole PRESALES team; PROJECT_WISE
+       orgs rotate only the ProjectPresales members tied to the lead's
+       project.
+
+Q3. Fallback when PROJECT_WISE mode can't resolve a usable project pool
+    (no project matched, or project has zero ProjectPresales members):
+    -> Chosen: fall back to the org-wide PRESALES pool rather than leaving
+       the lead unassigned.
+
+Q4. Eligible roles: PRESALES only (not AGENT).
+    -> Chosen, to match the ProjectPresales table's intent and the user's
+       own description ("presales members of the organisation").
+
+============================================================
+3. HOW THE NEW ALGORITHM WORKS
+============================================================
+
+LeadAllocationService.selectAssignee(organizationId, projectId?)
+
+  1. Reads the organization's leadAllocationMode.
+  2. If PROJECT_WISE and a projectId was passed: builds the eligible pool
+     from ProjectPresales for that project (active, non-deleted, PRESALES
+     role only).
+  3. If that pool is empty (ORG_WIDE mode, no projectId, project not
+     resolved, or project has nobody assigned) -> falls back to the full
+     org-wide pool of active PRESALES users.
+  4. If the org-wide pool is also empty -> returns null (lead is left in
+     NEW status for a manager to assign manually; nothing crashes).
+  5. Otherwise, rotates the cursor for that scope (organizationId +
+     projectId, where projectId = null means "org-wide scope"):
+       - Looks up (or creates, on first-ever use) the LeadAllocationState
+         row for that scope.
+       - Takes a Postgres row lock (SELECT ... FOR UPDATE) inside a
+         transaction so concurrent lead creations for the same scope cannot
+         race each other into picking the same "next" person or corrupting
+         the cursor.
+       - Finds the last-assigned user's position in a deterministic
+         (id-sorted) ordering of the eligible pool, and advances to the next
+         one. If the last-assigned user is no longer eligible (deactivated,
+         removed from the project, etc.) it just starts again from the front
+         of the current pool.
+       - Persists the new lastAssignedUserId and returns it.
+
+This gives a strict, fair rotation: every eligible person gets exactly one
+lead before anyone gets a second one, and it stays correct under concurrent
+webhook traffic (verified below).
+
+============================================================
+4. FILES CHANGED
+============================================================
+
+- src/modules/lead-ingestion/services/lead-allocation.service.ts
+    Rewritten: least-loaded -> round-robin cursor, org-wide/project-wise
+    mode support, PRESALES-only eligibility, transaction + row-lock safety.
+
+- src/modules/lead-ingestion/services/leads-webhook.service.ts
+    THE MAIN FIX: now calls LeadAllocationService.selectAssignee() with the
+    resolved projectId before creating the Lead row. Sets status/assignedToId
+    /assignedAt accordingly, and now writes a LeadActivityLog(CREATED) entry
+    recording who it was assigned to (this webhook path previously wrote no
+    activity log at all).
+
+- src/modules/lead-ingestion/services/leads.service.ts
+    - createManual(): validates an optional dto.projectId against the org,
+      passes it to selectAssignee(), stores it on the Lead, and now sets
+      assignedAt.
+    - ingestFromPortal(): now sets assignedAt when auto-assigned, and the
+      activity log description reflects auto-assignment.
+    - assign() (manual/managed reassignment): now sets assignedAt whenever
+      assignedToId is updated.
+
+- src/modules/lead-ingestion/dto/create-lead-manual.dto.ts
+    Added optional projectId field so manual leads can participate in
+    project-wise allocation.
+
+No schema/migration changes were needed -- the tables and enum already
+existed in prisma/schema.prisma and the migration
+20260915045853_add_lead_allocation was already applied to the database.
+Running `npx prisma generate` was required once because the generated
+client on disk was stale relative to the schema (this was blocking
+TypeScript compilation before any of the above edits could even type-check).
+
+============================================================
+5. HOW TO CONFIGURE PER ORGANIZATION
+============================================================
+
+- Organization.leadAllocationMode = ORG_WIDE  (default)
+    All active PRESALES users in the org rotate together for every lead,
+    regardless of project.
+
+- Organization.leadAllocationMode = PROJECT_WISE
+    Assign presales users to specific projects via the ProjectPresales
+    table (projectId + presalesId). Leads tagged with that project rotate
+    only among its assigned presales team. Leads with no resolvable project,
+    or a project with no one assigned yet, automatically fall back to the
+    org-wide pool so nothing is ever silently left unassigned just because
+    of a missing project link.
+
+No new API endpoints were added for managing ProjectPresales assignments in
+this pass -- that table already existed in the schema; wiring up
+create/list/remove endpoints for it (if not already present elsewhere in the
+project) would be a natural next step if you want admins to manage
+project-presales assignments through the API rather than directly in the DB.
+
+============================================================
+6. TESTING PERFORMED
+============================================================
+
+- `npx tsc --noEmit` across the whole backend: clean, no errors.
+- Full app boot (`npm run start:dev`): all routes mapped correctly,
+  including the webhook route, no startup errors.
+- Automated smoke test (temporary script, deleted after use) against the
+  real Postgres database, using a throwaway organization/users/projects that
+  were fully cleaned up afterward:
+    1. ORG_WIDE mode, 3 PRESALES users: 6 sequential picks produced a
+       perfect repeating cycle of all 3 users in order -> PASS.
+    2. PROJECT_WISE mode, a project with only 2 of the 3 users assigned via
+       ProjectPresales: 4 picks rotated only those 2, the 3rd user was never
+       picked -> PASS.
+    3. PROJECT_WISE mode, a project with ZERO ProjectPresales assignments:
+       correctly fell back to the org-wide pool of 3 -> PASS.
+    4. Concurrency: 6 *simultaneous* allocation calls for the same org-wide
+       scope resulted in a perfectly even 2/2/2 split across the 3 users,
+       with no duplicate/skipped assignments -> PASS (confirms the row-lock
+       correctly serializes concurrent webhook traffic).
+
+- Live HTTP test against the running dev server:
+    
+    - POST /webhooks/leads/:token with a fresh sourceLeadId -> response
+      included "status":"created" and a real "assignedToId" (previously this
+      endpoint never returned/stored an assignedToId at all).
+
+    - Re-posting the same sourceLeadId -> correctly returned
+      "status":"duplicate" (existing dedup behavior preserved).
+    - Verified in the database that the created Lead had
+      status=ASSIGNED, assignedToId set, assignedAt timestamped, and a
+      LeadActivityLog(CREATED) entry recording the assignment.
+      
+    - All test data (organization, users, project, integration, lead,
+      activity log, allocation state) was deleted after verification.
+
+============================================================
+7. KNOWN LIMITATIONS / POSSIBLE FOLLOW-UPS
+============================================================
+
+- Extremely narrow race window: if two leads for a brand-new
+  organization/project scope (i.e. its very first-ever lead) are created in
+  the same instant, before any LeadAllocationState row exists for that
+  scope, Postgres's default unique-index behavior treats multiple NULL
+  projectId rows as distinct, so in theory two cursor rows could both get
+  created for the org-wide scope at that exact first moment. This only
+  affects the very first lead(s) of a brand-new scope, self-heals
+  immediately afterward, and never causes a lead to be lost or duplicated --
+  worst case is a transient, cosmetic imperfection in fairness for that one
+  instant. Closing it fully would require a partial unique index
+  (e.g. UNIQUE (organizationId) WHERE projectId IS NULL), which was not
+  added since it changes the schema and wasn't asked for.
+- Lead allocation and Lead creation happen as two separate database
+  operations (advance the cursor, then insert the Lead row) rather than one
+  atomic transaction spanning both. If the process crashed in the split
+  second between those two steps, the cursor would have advanced but that
+  particular lead would never be created. This mirrors how the rest of the
+  module was already structured (no existing path wraps lead creation and
+  its activity log in one transaction either) and is an acceptable,
+  extremely rare risk rather than a correctness bug in normal operation.
+- PortalIngestDto (the secondary /leads/portal-ingest endpoint) was not
+  given a projectId field, since it has no project concept in its payload
+  today. It still auto-allocates, but always via the org-wide fallback.

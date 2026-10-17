@@ -14,6 +14,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MailModule } from './modules/mail/mail.module';
 import { VerificationModule } from './modules/verification/verification.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { VerificationModule } from './modules/verification/verification.module';
     TasksModule,
     NotificationsModule,
     DashboardModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}

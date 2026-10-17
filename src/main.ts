@@ -23,6 +23,8 @@ async function bootstrap() {
       origin: corsOrigins,
       methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
       allowedHeaders: ['Content-Type', 'Authorization', 'x-webhook-secret'],
+      // Lets the browser read download file names (Excel template, uploaded sheets, WhatsApp media).
+      exposedHeaders: ['Content-Disposition'],
       credentials: false,
     },
   });
