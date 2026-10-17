@@ -264,7 +264,7 @@ Response `201`: the lead + `deduplicated`.
 
 ### 8.2 `GET /leads`
 
-Query: `status`, `source`, `customerType`, `assignedToId`, `city`, `from`, `to` (created date, inclusive days), `search` (name or phone), `page`, `pageSize` (≤ 200).
+Query: `status`, `source`, `customerType`, `assignedToId`, `city`, `from`, `to` (created date, inclusive days), `search` (name or phone; names also match across Hindi/English spellings — "ramesh" finds "रमेश", via the phonetic `searchKey` column kept by `PrismaService`), `page`, `pageSize` (≤ 200).
 
 ```json
 {
@@ -442,7 +442,7 @@ Tables `products` and `stock_movements` (migration `inventory_products`). Read: 
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/inventory/products?search&category&lowStock=true&page&pageSize` | List, paginated `{ items, total, page, pageSize }` |
+| `GET` | `/inventory/products?search&category&lowStock=true&page&pageSize` | List, paginated `{ items, total, page, pageSize }`. `search` matches name/SKU/brand, and name/brand across Hindi/English spellings |
 | `GET` | `/inventory/summary` | `{ totalProducts, totalUnits, stockValue, lowStock, outOfStock, byCategory }` |
 | `GET` | `/inventory/products/:id` | One product + last 20 stock movements |
 | `POST` | `/inventory/products` | Create (optional opening `stock` → `CREATED` movement) |

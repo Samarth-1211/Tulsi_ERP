@@ -13,6 +13,7 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { leadVisibilityWhere } from '../../../common/utils/lead-scope.util';
+import { searchKeyFilter } from '../../../common/utils/phonetic-key.util';
 import { businessDayEndInstant, businessDayStartInstant } from '../../../common/utils/business-date.util';
 import { CreateLeadManualDto } from '../dto/create-lead-manual.dto';
 import { LeadQueryDto } from '../dto/lead-querry-dto';
@@ -24,6 +25,7 @@ import { LeadAssignmentService } from './lead-assignment.service';
 import { LeadIngestionService } from './lead-ingestion.service';
 import { CLOSED_LEAD_STATUSES, formatSourceLabel, LeadDedupService, leadLabel, toE164 } from './lead-dedup.service';
 import { LeadChangeActor, LeadFieldChange, LeadNotificationsService } from './lead-notifications.service';
+import { rememberCity } from '../utils/city.util';
 
 const OPEN_LEAD_STATUSES: LeadStatus[] = [LeadStatus.NEW, LeadStatus.ASSIGNED, LeadStatus.IN_PROGRESS];
 const BULK_CHUNK_SIZE = 1000;
@@ -140,6 +142,7 @@ export class LeadsService {
             ? {
                 OR: [
                   { name: { contains: search, mode: 'insensitive' as const } },
+                  ...(searchKeyFilter(search) ? [searchKeyFilter(search)!] : []),
                   ...(searchPhone && searchPhone.replace('+', '').length >= 3
                     ? [{ phone: { contains: searchPhone.replace(/^\+/, '') } }]
                     : []),
@@ -177,6 +180,12 @@ export class LeadsService {
         ...(actor.role === Role.ADMIN ? { createdAt: { gt: user.leadsSeenAt } } : { assignedAt: { gt: user.leadsSeenAt } }),
       },
     });
+  }
+
+  /** Every city the org's leads have come from, A–Z — options for the Leads "City" filter. */
+  async listCities(actor: AuthenticatedUser): Promise<string[]> {
+    const cities = await this.prisma.city.findMany({ where: { orgId: actor.orgId }, orderBy: { name: 'asc' }, select: { name: true } });
+    return cities.map((c) => c.name);
   }
 
   async markSeen(actor: AuthenticatedUser): Promise<void> {
@@ -271,7 +280,7 @@ export class LeadsService {
       phone,
       altPhone,
       email: dto.email,
-      city: dto.city,
+      city: dto.city?.trim(),
       pincode: dto.pincode,
       address: dto.address,
       customerType: dto.customerType,
@@ -302,6 +311,7 @@ export class LeadsService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.lead.update({ where: { id: lead.id }, data: { ...next, ...this.activityStamp(lead, actor) } });
+      await rememberCity(tx, actor.orgId, next.city);
       await tx.leadActivityLog.create({
         data: {
           orgId: actor.orgId,

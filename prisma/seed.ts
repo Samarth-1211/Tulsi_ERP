@@ -116,6 +116,7 @@ async function main() {
   const managers = [m1, m2];
   for (let i = 0; i < samples.length; i++) {
     const s = samples[i];
+    await prisma.city.createMany({ data: [{ orgId: demo.id, name: s.city, key: s.city.toLowerCase() }], skipDuplicates: true });
     const assignee = s.st === LeadStatus.NEW ? null : managers[i % 2];
     const created = daysAgo(12 - i);
     const lead = await prisma.lead.create({

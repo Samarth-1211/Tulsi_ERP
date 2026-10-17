@@ -16,6 +16,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { LeadAllocationService } from './lead-allocation.service';
 import { LeadDedupService, formatSourceLabel, toE164 } from './lead-dedup.service';
 import { LeadNotificationsService } from './lead-notifications.service';
+import { rememberCity } from '../utils/city.util';
 
 /** Ad attribution fields (LeadAdAttribution minus its own keys). */
 export type IngestAttribution = Partial<
@@ -168,6 +169,8 @@ export class LeadIngestionService {
             },
           },
         });
+
+        await rememberCity(tx, input.orgId, lead.city);
 
         const { assigneeId, method } = await this.allocate(tx, input, options.noAutoAssign ?? false);
         if (!assigneeId) {

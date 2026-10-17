@@ -88,7 +88,7 @@ export class AdjustStockDto {
 }
 
 export class ProductQueryDto {
-  @ApiProperty({ required: false, description: 'Name, SKU or brand contains' }) @IsOptional() @IsString() search?: string;
+  @ApiProperty({ required: false, description: 'Name, SKU or brand contains; name/brand also match across Hindi/English spellings' }) @IsOptional() @IsString() search?: string;
   @ApiProperty({ required: false, enum: PRODUCT_CATEGORIES }) @IsOptional() @IsIn(PRODUCT_CATEGORIES) category?: string;
   @ApiProperty({ required: false, description: '"true" = only products at or below their reorder level' })
   @IsOptional()

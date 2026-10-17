@@ -293,6 +293,16 @@ export class LeadsController {
     return this.leadsService.countUnseen(actor);
   }
 
+  // Declared before `GET :id` so "cities" isn't captured as a lead id.
+  @Get('cities')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...LEAD_ROLES)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Every city the org’s leads have come from, A–Z (options for the City filter)' })
+  listCities(@CurrentUser() actor: AuthenticatedUser) {
+    return this.leadsService.listCities(actor);
+  }
+
   @Patch('seen')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...LEAD_ROLES)

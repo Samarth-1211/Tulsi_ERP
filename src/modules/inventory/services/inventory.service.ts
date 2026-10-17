@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { Readable } from 'stream';
 import { CellValue, Workbook, Worksheet } from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { searchKeyFilter } from '../../../common/utils/phonetic-key.util';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { AdjustStockDto, CreateProductDto, PRODUCT_CATEGORIES, PRODUCT_UNITS, ProductQueryDto, UpdateProductDto } from '../dto/product.dto';
 
@@ -44,7 +45,9 @@ export class InventoryService {
     const where: Prisma.ProductWhereInput = { orgId: actor.orgId, deletedAt: null };
     if (q.category) where.category = q.category;
     if (q.search) {
-      where.OR = ['name', 'sku', 'brand'].map((f) => ({ [f]: { contains: q.search, mode: 'insensitive' } }));
+      where.OR = ['name', 'sku', 'brand'].map((f) => ({ [f]: { contains: q.search, mode: 'insensitive' } }) as Prisma.ProductWhereInput);
+      const byKey = searchKeyFilter(q.search); // English ↔ Hindi spelling
+      if (byKey) where.OR.push(byKey);
     }
     const page = q.page ?? 1;
     const pageSize = Math.min(q.pageSize ?? 50, 500);

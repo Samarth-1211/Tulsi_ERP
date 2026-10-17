@@ -21,7 +21,7 @@ export class LeadQueryDto {
   @IsDateString()
   to?: string;
 
-  @ApiProperty({ required: false, description: 'Name or phone contains' })
+  @ApiProperty({ required: false, description: 'Name or phone contains; names also match across Hindi/English spellings ("ramesh" finds "रमेश")' })
   @IsOptional()
   @IsString()
   search?: string;

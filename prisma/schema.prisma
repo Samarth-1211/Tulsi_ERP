@@ -280,10 +280,12 @@ model Organization {
   suspendedAt     DateTime?
   suspendedReason String?
   archivedAt      DateTime?
+  searchKey       String? // phonetic key of name (Hindi/English search) — set by PrismaService
 
   settings      OrgSettings?
   users         User[]
   leads         Lead[]
+  cities        City[]
   integrations  Integration[]
   webhookEvents WebhookEvent[]
   attendance    Attendance[]
@@ -521,6 +523,7 @@ model Lead {
   // RCRM-kept: the Click-to-WhatsApp ad of the first message, and the Excel upload a lead came from.
   adSourceId    String?
   importBatchId String?
+  searchKey     String? // phonetic key of name (Hindi/English search) — set by PrismaService
 
   org          Organization      @relation(fields: [orgId], references: [id])
   integration  Integration?      @relation(fields: [integrationId], references: [id])
@@ -550,6 +553,21 @@ model Lead {
   @@index([orgId, createdAt])
   @@index([adSourceId])
   @@index([importBatchId])
+}
+
+// Every distinct lead city of an org — feeds the Leads "City" filter dropdown.
+// Upserted whenever a lead is created or its city edited; never removed.
+model City {
+  id        String   @id @default(uuid())
+  orgId     String
+  name      String // display form, as first seen (trimmed)
+  key       String // lower(trim(name)) — dedup key, so "indore" and "Indore" are one city
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, key])
+  @@map("cities")
 }
 
 model LeadAdAttribution {
@@ -1187,6 +1205,7 @@ model Product {
   stock        Int     @default(0)
   reorderLevel Int     @default(0) // low-stock alert at or below this
   description  String?
+  searchKey    String? // phonetic key of name + brand (Hindi/English search) — set by PrismaService
   isActive     Boolean @default(true)
 
   createdById String?

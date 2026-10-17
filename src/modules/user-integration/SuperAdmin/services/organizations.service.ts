@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, Role, UserStatus, VerificationTokenType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../../../prisma/prisma.service';
+import { searchKeyFilter } from '../../../../common/utils/phonetic-key.util';
 import { AuthenticatedUser } from '../../../../common/decorators/current-user.decorator';
 import { EmailDeliveryStatus, MailService } from '../../../mail/mail.service';
 import { VerificationService } from '../../../verification/verification.service';
@@ -265,6 +266,7 @@ export class OrganizationsService {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
         { email: { contains: query.search, mode: 'insensitive' } },
+        ...(searchKeyFilter(query.search) ? [searchKeyFilter(query.search)!] : []),
       ];
     }
 
