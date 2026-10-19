@@ -1,11 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { MAX_MONEY } from '../../../common/utils/limits.util';
 import { CustomerType } from '@prisma/client';
 
 /** PATCH /leads/:id — the lead's own fields. Status and assignee have their own endpoints. */
 export class UpdateLeadDetailsDto {
-  @ApiProperty({ required: false }) @IsOptional() @IsString() @IsNotEmpty() name?: string;
+  @ApiProperty({ required: false })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200) name?: string;
   @ApiProperty({ required: false, description: 'Normalized to E.164; must not belong to another open lead' })
   @IsOptional()
   @IsString()
@@ -23,5 +26,6 @@ export class UpdateLeadDetailsDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(MAX_MONEY)
   estimatedValue?: number;
 }

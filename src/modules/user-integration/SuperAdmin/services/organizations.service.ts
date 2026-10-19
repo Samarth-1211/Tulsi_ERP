@@ -348,9 +348,22 @@ export class OrganizationsService {
         },
       });
 
+      // Remember exactly who the suspension switched off, so reactivation turns
+      // back on only them — not people an admin had deactivated on purpose.
+      const deactivated = await tx.user.findMany({
+        where: { orgId: id, deletedAt: null, status: UserStatus.ACTIVE },
+        select: { id: true },
+      });
+      const deactivatedUserIds = deactivated.map((u) => u.id);
+
       await tx.user.updateMany({
-        where: { orgId: id, deletedAt: null },
+        where: { id: { in: deactivatedUserIds } },
         data: { status: UserStatus.INACTIVE },
+      });
+      // End every open session in the org right away.
+      await tx.refreshToken.updateMany({
+        where: { userId: { in: deactivatedUserIds }, revokedAt: null },
+        data: { revokedAt: new Date() },
       });
 
       await tx.organizationAuditLog.create({
@@ -359,6 +372,7 @@ export class OrganizationsService {
           orgId: id,
           performedById: actor.userId,
           reason: dto.reason,
+          metadata: { deactivatedUserIds },
         },
       });
 
@@ -387,6 +401,26 @@ export class OrganizationsService {
           suspendedAt: null,
           suspendedReason: null,
         },
+      });
+
+      // Turn back on the users the suspension switched off. Suspensions made
+      // before that list was recorded fall back to the users updated in the
+      // same moment the org was suspended.
+      const suspension = await tx.organizationAuditLog.findFirst({
+        where: { orgId: id, action: 'ORG_SUSPENDED' },
+        orderBy: { createdAt: 'desc' },
+        select: { metadata: true },
+      });
+      const recorded = (suspension?.metadata as { deactivatedUserIds?: unknown } | null)?.deactivatedUserIds;
+      const suspendedAt = organization.suspendedAt;
+      const restoreWhere: Prisma.UserWhereInput = Array.isArray(recorded)
+        ? { id: { in: recorded.filter((v): v is string => typeof v === 'string') } }
+        : suspendedAt
+          ? { updatedAt: { gte: new Date(suspendedAt.getTime() - 10_000), lte: new Date(suspendedAt.getTime() + 10_000) } }
+          : { id: { in: [] } };
+      await tx.user.updateMany({
+        where: { ...restoreWhere, orgId: id, deletedAt: null, status: UserStatus.INACTIVE },
+        data: { status: UserStatus.ACTIVE },
       });
 
       await tx.organizationAuditLog.create({
@@ -431,6 +465,10 @@ export class OrganizationsService {
       await tx.user.updateMany({
         where: { orgId: id, deletedAt: null },
         data: { status: UserStatus.INACTIVE },
+      });
+      await tx.refreshToken.updateMany({
+        where: { user: { orgId: id }, revokedAt: null },
+        data: { revokedAt: new Date() },
       });
 
       await tx.organizationAuditLog.create({

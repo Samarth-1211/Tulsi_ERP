@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { LeaveRequest, LeaveStatus, Role } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
@@ -18,6 +18,22 @@ export class LeaveService {
 
     if (endDate.getTime() < startDate.getTime()) {
       throw new BadRequestException('endDate must be on or after startDate');
+    }
+    if (startDate.getTime() < startOfDay().getTime()) {
+      throw new BadRequestException('Leave can only be applied for today or a later date');
+    }
+
+    const overlapping = await this.prisma.leaveRequest.findFirst({
+      where: {
+        userId: actor.userId,
+        status: { in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
+        startDate: { lte: endDate },
+        endDate: { gte: startDate },
+      },
+      select: { id: true },
+    });
+    if (overlapping) {
+      throw new ConflictException('You already have a pending or approved leave request for some of these days');
     }
 
     return this.prisma.leaveRequest.create({

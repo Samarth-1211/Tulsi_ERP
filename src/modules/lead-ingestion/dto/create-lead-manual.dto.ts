@@ -1,12 +1,15 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { CustomerType, LeadSource } from '@prisma/client';
-import { Type } from 'class-transformer';
-import { IsEmail, IsEnum, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsEmail, IsEnum, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { MAX_MONEY } from '../../../common/utils/limits.util';
 
 export const MANUAL_LEAD_SOURCES = [LeadSource.MANUAL, LeadSource.WALK_IN, LeadSource.REFERRAL, LeadSource.OTHER] as const;
 
 export class CreateLeadManualDto {
   @ApiProperty({ example: 'Sharma Hardware' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(200)
   @IsNotEmpty()
   @IsString()
   name!: string;
@@ -50,6 +53,7 @@ export class CreateLeadManualDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(MAX_MONEY)
   estimatedValue?: number;
 
   @ApiProperty({

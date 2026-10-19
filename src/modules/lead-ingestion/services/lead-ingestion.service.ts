@@ -17,6 +17,8 @@ import { LeadAllocationService } from './lead-allocation.service';
 import { LeadDedupService, formatSourceLabel, toE164 } from './lead-dedup.service';
 import { LeadNotificationsService } from './lead-notifications.service';
 import { rememberCity } from '../utils/city.util';
+import { MAX_MONEY } from '../../../common/utils/limits.util';
+import { LEAD_ASSIGNEE_ROLES } from '../../../common/utils/lead-scope.util';
 
 /** Ad attribution fields (LeadAdAttribution minus its own keys). */
 export type IngestAttribution = Partial<
@@ -147,7 +149,8 @@ export class LeadIngestionService {
             city: input.city?.trim() || null,
             pincode: input.pincode?.trim() || null,
             address: input.address?.trim() || null,
-            estimatedValue: input.estimatedValue,
+            // Sheets/webhooks can carry absurd amounts; drop what the column can't hold.
+            estimatedValue: input.estimatedValue != null && input.estimatedValue <= MAX_MONEY ? input.estimatedValue : undefined,
             customerType: input.customerType,
             requirementNotes: input.requirementNotes?.trim() || null,
             customFields: (input.customFields ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -250,11 +253,11 @@ export class LeadIngestionService {
           orgId: input.orgId,
           status: UserStatus.ACTIVE,
           deletedAt: null,
-          role: { not: Role.SUPER_ADMIN },
+          role: { in: LEAD_ASSIGNEE_ROLES },
         },
         select: { id: true },
       });
-      if (!assignee) throw new BadRequestException('assignToId is not an active user in your organization');
+      if (!assignee) throw new BadRequestException('assignToId must be an active Admin, Manager or Caller in your organization');
       return { assigneeId: assignee.id, method: AssignmentMethod.MANUAL };
     }
     if (noAutoAssign) return { assigneeId: null, method: null };

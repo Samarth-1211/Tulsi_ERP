@@ -1,6 +1,7 @@
+import { StrongPassword } from '../../../../common/validators/strong-password.decorator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
-import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class CreateUserDto {
   @ApiProperty({ example: 'agent@demorealty.com' })
@@ -8,7 +9,7 @@ export class CreateUserDto {
   email!: string;
 
   @ApiProperty({ example: 'StrongPass@123' })
-  @MinLength(8)
+  @StrongPassword()
   password!: string;
 
   @ApiProperty({ example: 'Ramesh Kumar' })

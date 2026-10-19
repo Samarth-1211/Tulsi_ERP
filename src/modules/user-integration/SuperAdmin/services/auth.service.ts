@@ -20,6 +20,10 @@ import { ForgotPasswordDto } from '../dto/forgot-password.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
 
 const SALT_ROUNDS = 12;
+/** A rotated refresh token reused within this window is a multi-tab race, not theft. */
+const REFRESH_REUSE_GRACE_MS = 60_000;
+/** Compared against when the email matches no account, to keep login timing uniform. */
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('timing-equaliser-not-a-password', SALT_ROUNDS);
 
 /**
  * Reset codes only reach the user by email, so a broken mailer means the
@@ -62,7 +66,7 @@ export class AuthService {
         orgId: user.orgId,
       },
       {
-        secret: this.configService.get<string>('JWT_ACCESS_SECRET', 'dev-access-secret'),
+        secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
         expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES_IN', '15m'),
       },
     );
@@ -114,15 +118,18 @@ export class AuthService {
   ): Promise<TokenPair & { user: Partial<User> }> {
     const user = await this.prisma.user.findFirst({
       where: { email: dto.email.toLowerCase(), status: UserStatus.ACTIVE, deletedAt: null },
+      include: { org: { select: { isActive: true } } },
     });
 
-    if (!user || !isRoleAllowed(user.role)) {
+    // Always run bcrypt so unknown emails take as long as wrong passwords
+    // (no account enumeration through response timing).
+    const passwordMatches = await bcrypt.compare(dto.password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    if (!user || !isRoleAllowed(user.role) || !passwordMatches) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!passwordMatches) {
-      throw new UnauthorizedException('Invalid email or password');
+    if (user.org && !user.org.isActive) {
+      throw new UnauthorizedException('Your organization’s account is not active. Please contact support.');
     }
 
     if (!user.isVerified) {
@@ -163,23 +170,43 @@ export class AuthService {
     const tokenHash = this.hashOpaqueToken(dto.refreshToken);
 
     const storedToken = await this.prisma.refreshToken.findFirst({
-      where: { userId, tokenHash, revokedAt: null },
+      where: { userId, tokenHash },
     });
+
+    if (storedToken?.revokedAt) {
+      // A rotated token came back. Within a short grace window that is two
+      // browser tabs refreshing at once; later it means the token was copied,
+      // so every session of this user is ended.
+      if (Date.now() - storedToken.revokedAt.getTime() > REFRESH_REUSE_GRACE_MS) {
+        await this.prisma.refreshToken.updateMany({
+          where: { userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+      throw new UnauthorizedException('Refresh token is invalid or expired');
+    }
 
     if (!storedToken || storedToken.expiresAt < new Date()) {
       throw new UnauthorizedException('Refresh token is invalid or expired');
     }
 
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user || user.status !== UserStatus.ACTIVE || user.deletedAt) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { org: { select: { isActive: true } } },
+    });
+    if (!user || user.status !== UserStatus.ACTIVE || user.deletedAt || (user.org && !user.org.isActive)) {
       throw new UnauthorizedException('User no longer active');
     }
 
-    // Rotate: revoke the used token and issue a fresh pair.
-    await this.prisma.refreshToken.update({
-      where: { id: storedToken.id },
+    // Rotate: revoke the used token and issue a fresh pair. The conditional
+    // update makes two parallel refreshes of one token yield one winner.
+    const rotated = await this.prisma.refreshToken.updateMany({
+      where: { id: storedToken.id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    if (rotated.count === 0) {
+      throw new UnauthorizedException('Refresh token is invalid or expired');
+    }
 
     const accessToken = this.generateAccessToken(user);
     const refreshToken = await this.issueRefreshToken(user.id);

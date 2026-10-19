@@ -8,3 +8,7 @@ email-previews
 
 # Uploaded project brochures (UPLOADS_DIR) — runtime data, not source
 uploads
+
+# Production deploy (docker-compose.yml): local backups and deploy log on the server
+backups/
+deploy-history.log

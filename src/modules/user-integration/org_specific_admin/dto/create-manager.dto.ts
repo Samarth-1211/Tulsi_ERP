@@ -1,6 +1,7 @@
+import { StrongPassword } from '../../../../common/validators/strong-password.decorator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsNotEmpty, IsString, Matches, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Matches } from 'class-validator';
 
 export class CreateManagerDto {
   // Lower-cased on the way in: login looks the account up by
@@ -12,7 +13,7 @@ export class CreateManagerDto {
   email!: string;
 
   @ApiProperty({ example: 'StrongPass@123' })
-  @MinLength(8)
+  @StrongPassword()
   password!: string;
 
   @ApiProperty({ example: 'Ravi' })

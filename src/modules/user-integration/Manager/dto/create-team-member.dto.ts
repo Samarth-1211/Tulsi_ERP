@@ -1,4 +1,5 @@
-import { IsEmail, IsIn, IsString, Matches, MinLength } from 'class-validator';
+import { StrongPassword } from '../../../../common/validators/strong-password.decorator';
+import { IsEmail, IsIn, IsString, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { Role } from '@prisma/client';
 
@@ -13,7 +14,7 @@ export class CreateTeamMemberDto {
   email!: string;
 
   @IsString()
-  @MinLength(8)
+  @StrongPassword()
   password!: string;
 
   @IsString()

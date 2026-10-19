@@ -346,6 +346,12 @@ export class LeadsService {
     const from = lead.status;
     const to = dto.status;
     if (from === to) throw new BadRequestException('Lead is already in this status');
+    // A won deal is final: reopening it silently would undo the conversion in
+    // every report, so only an Admin may do it, and must say why.
+    if (from === LeadStatus.CONVERTED) {
+      if (actor.role !== Role.ADMIN) throw new ForbiddenException('Only an Admin can reopen a converted lead');
+      if (!dto.note?.trim()) throw new BadRequestException('A note is required to reopen a converted lead');
+    }
     if (to === LeadStatus.CONVERTED && !dto.note?.trim()) {
       throw new BadRequestException('A note is required to mark a lead CONVERTED');
     }
@@ -411,6 +417,11 @@ export class LeadsService {
   async addFollowUp(actor: AuthenticatedUser, leadId: string, dto: CreateFollowUpDto) {
     const lead = await this.findVisibleLead(actor, leadId);
     const nextFollowUpAt = dto.nextFollowUpAt ? new Date(dto.nextFollowUpAt) : null;
+    // A few minutes of slack for device clocks; anything earlier is a typo
+    // that would sit in "overdue" from the moment it is saved.
+    if (nextFollowUpAt && nextFollowUpAt.getTime() < Date.now() - 5 * 60_000) {
+      throw new BadRequestException('The next follow-up must be in the future');
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.followUp.updateMany({

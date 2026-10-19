@@ -3,9 +3,31 @@ name: Deploy backend
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
+  # Lint, typecheck, unit tests and a production build must pass before anything ships.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma validate
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
   deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: SSH in and redeploy
@@ -14,7 +36,9 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          # Server setup: DEPLOYMENT.md. deploy.sh backs up, pulls, rebuilds and
+          # waits for health; the backend container applies migrations on start.
           script: |
+            set -e
             cd /opt/tulsi-erp-backend
-            git pull origin main
-            docker compose up -d --build backend
+            bash scripts/deploy.sh

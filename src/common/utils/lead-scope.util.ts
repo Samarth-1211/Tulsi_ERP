@@ -16,6 +16,9 @@ export function managerLeadScope(managerId: string): Prisma.LeadWhereInput {
 /** Roles with no access to leads at all (Phase 1). */
 export const NO_LEAD_ACCESS_ROLES: Role[] = [Role.DELIVERY_PARTNER, Role.WAREHOUSE_STAFF];
 
+/** Roles a lead may be assigned to — anyone else could never open it. */
+export const LEAD_ASSIGNEE_ROLES: Role[] = [Role.ADMIN, Role.MANAGER, Role.CALLER];
+
 /**
  * Which of the org's leads the actor may see: Admins/Super Admins see all of
  * them, Managers see their own and their team's, Callers see only their own,

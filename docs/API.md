@@ -26,7 +26,7 @@ Every endpoint except `/auth/*` and `/webhooks/*` needs `Authorization: Bearer <
 #### `POST /auth/login`
 
 ```json
-{ "email": "demo.caller1@tulsi-erp.local", "password": "Demo@1234" }
+{ "email": "caller@example.com", "password": "<password>" }
 ```
 
 ```json
@@ -34,7 +34,7 @@ Every endpoint except `/auth/*` and `/webhooks/*` needs `Authorization: Bearer <
   "accessToken": "<jwt>",
   "refreshToken": "<base64url-user-id>.<random>",
   "expiresIn": "15m",
-  "user": { "id": "…", "email": "demo.caller1@tulsi-erp.local", "name": "Amit Caller", "role": "CALLER", "orgId": "…" }
+  "user": { "id": "…", "email": "caller@example.com", "name": "Amit Caller", "role": "CALLER", "orgId": "…" }
 }
 ```
 
@@ -462,15 +462,4 @@ POST /inventory/products
 
 ## 13. Seeded accounts (`npx prisma db seed`)
 
-Password: `SEED_DEFAULT_PASSWORD` or `Demo@1234`.
-
-| Org | Role | Email |
-|---|---|---|
-| — | SUPER_ADMIN | `superadmin@tulsi-erp.local` |
-| Tulsi Plywood | ADMIN | `admin@tulsiplywood.local` |
-| Demo Wholesale | ADMIN | `demo.admin@tulsi-erp.local` |
-| Demo Wholesale | MANAGER | `demo.manager1@tulsi-erp.local`, `demo.manager2@tulsi-erp.local` |
-| Demo Wholesale | CALLER | `demo.caller1..4@tulsi-erp.local` (1–2 → manager1, 3–4 → manager2) |
-| Demo Wholesale | DELIVERY_PARTNER | `demo.driver1@tulsi-erp.local`, `demo.driver2@tulsi-erp.local` |
-
-The demo org also gets 12 leads across sources/statuses (re-created on every seed run), two inactive integrations, yesterday's attendance for every caller and today's check-in for callers 1–2.
+The seed creates only the SUPER_ADMIN, from `SUPERADMIN_EMAIL` (default `superadmin@tulsi-erp.local`) and `SUPERADMIN_PASSWORD` (required, no default). Organizations, admins, managers and team members are all created by the Super Admin from the portal.

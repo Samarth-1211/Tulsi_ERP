@@ -1,13 +1,16 @@
 import { Body, Controller, Get, Headers, HttpStatus, Logger, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { SkipThrottle } from '@nestjs/throttler';
 import { WhatsAppWebhookService } from '../services/whatsapp-webhook.service';
 import { MetaWebhookPayload } from '../utils/whatsapp-payload.util';
 
 // Deliberately NO JwtAuthGuard — this is hit directly by Meta's servers,
 // which can't do a login flow. The unguessable :slug in the URL plus the
 // verifyToken handshake (GET) and the X-Hub-Signature-256 HMAC (POST) are
-// the authentication.
+// the authentication. Not rate limited: Meta delivers in bursts and retries
+// anything that fails, so throttling would only duplicate work.
+@SkipThrottle()
 @Controller('webhooks/whatsapp')
 export class WhatsAppWebhookController {
   private readonly logger = new Logger(WhatsAppWebhookController.name);

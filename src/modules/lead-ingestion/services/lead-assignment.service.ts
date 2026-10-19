@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { ActivityType, AssignmentMethod, Lead, LeadStatus, Prisma, Role, UserStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
-import { managerLeadScope } from '../../../common/utils/lead-scope.util';
+import { LEAD_ASSIGNEE_ROLES, managerLeadScope } from '../../../common/utils/lead-scope.util';
 import { LeadAllocationService } from './lead-allocation.service';
 import { LeadNotificationsService } from './lead-notifications.service';
 
@@ -256,11 +256,14 @@ export class LeadAssignmentService {
         orgId: actor.orgId,
         status: UserStatus.ACTIVE,
         deletedAt: null,
-        role: { not: Role.SUPER_ADMIN },
       },
       select: { id: true, name: true, role: true, managerId: true },
     });
     if (!target) throw new BadRequestException('toUserId does not reference an active user in your organization');
+    // Delivery/warehouse staff can't open leads — a lead given to them would vanish from every list.
+    if (!LEAD_ASSIGNEE_ROLES.includes(target.role)) {
+      throw new BadRequestException(`${target.name} can't be given leads — choose an Admin, Manager or Caller`);
+    }
 
     if (actor.role === Role.MANAGER && target.id !== actor.userId && target.managerId !== actor.userId) {
       throw new ForbiddenException('Managers can only assign a lead to themselves or their own team');

@@ -1,5 +1,6 @@
+import { StrongPassword } from '../../../../common/validators/strong-password.decorator';
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty } from 'class-validator';
 
 export class ResetPasswordDto {
   @ApiProperty({ example: 'admin@demorealty.com' })
@@ -11,6 +12,6 @@ export class ResetPasswordDto {
   otp!: string;
 
   @ApiProperty({ example: 'NewStrongPass123' })
-  @MinLength(8)
+  @StrongPassword()
   newPassword!: string;
 }

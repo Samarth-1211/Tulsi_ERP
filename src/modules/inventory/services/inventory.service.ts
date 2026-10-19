@@ -5,6 +5,7 @@ import { CellValue, Workbook, Worksheet } from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { searchKeyFilter } from '../../../common/utils/phonetic-key.util';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
+import { MAX_MONEY, MAX_QUANTITY } from '../../../common/utils/limits.util';
 import { AdjustStockDto, CreateProductDto, PRODUCT_CATEGORIES, PRODUCT_UNITS, ProductQueryDto, UpdateProductDto } from '../dto/product.dto';
 
 export const MAX_PRODUCT_FILE_BYTES = 5 * 1024 * 1024;
@@ -123,14 +124,21 @@ export class InventoryService {
   async adjustStock(actor: AuthenticatedUser, id: string, dto: AdjustStockDto) {
     if (dto.change === 0) throw new BadRequestException('Change must not be zero');
     return this.prisma.$transaction(async (tx) => {
+      // One conditional UPDATE: parallel adjustments queue on the row lock and
+      // each re-checks the live stock, so none is lost and stock never goes below 0.
+      const changed = await tx.product.updateMany({
+        where: { id, orgId: actor.orgId, deletedAt: null, ...(dto.change < 0 ? { stock: { gte: -dto.change } } : {}) },
+        data: { stock: { increment: dto.change } },
+      });
       const product = await tx.product.findFirst({ where: { id, orgId: actor.orgId, deletedAt: null } });
       if (!product) throw new NotFoundException('Product not found');
-      const balance = product.stock + dto.change;
-      if (balance < 0) throw new BadRequestException(`Only ${product.stock} ${product.unit.toLowerCase()}(s) in stock`);
+      if (changed.count === 0) {
+        throw new BadRequestException(`Only ${product.stock} ${product.unit.toLowerCase()}(s) in stock`);
+      }
       await tx.stockMovement.create({
-        data: { orgId: actor.orgId, productId: id, change: dto.change, balanceAfter: balance, reason: dto.reason, note: dto.note, userId: actor.userId },
+        data: { orgId: actor.orgId, productId: id, change: dto.change, balanceAfter: product.stock, reason: dto.reason, note: dto.note, userId: actor.userId },
       });
-      return tx.product.update({ where: { id }, data: { stock: balance } });
+      return product;
     });
   }
 
@@ -209,9 +217,9 @@ export class InventoryService {
         description: this.text(values.description) || null,
         price: this.num(values.price, row, 'Price', issues) ?? 0,
         costPrice: this.num(values.costPrice, row, 'Cost Price', issues),
-        reorderLevel: Math.round(this.num(values.reorderLevel, row, 'Reorder Level', issues) ?? 0),
+        reorderLevel: Math.round(this.num(values.reorderLevel, row, 'Reorder Level', issues, MAX_QUANTITY) ?? 0),
       };
-      const stock = Math.max(0, Math.round(this.num(values.stock, row, 'Stock', issues) ?? 0));
+      const stock = Math.max(0, Math.round(this.num(values.stock, row, 'Stock', issues, MAX_QUANTITY) ?? 0));
 
       try {
         const existing = sku ? await this.prisma.product.findFirst({ where: { orgId: actor.orgId, sku, deletedAt: null } }) : null;
@@ -305,10 +313,14 @@ export class InventoryService {
     return String(v).trim();
   }
 
-  private num(v: CellValue | undefined, row: number, label: string, issues: ImportIssue[]): number | undefined {
+  private num(v: CellValue | undefined, row: number, label: string, issues: ImportIssue[], max = MAX_MONEY): number | undefined {
     const t = this.text(v).replace(/[₹,\s]/g, '');
     if (!t) return undefined;
     const n = Number(t);
+    if (Number.isFinite(n) && n > max) {
+      issues.push({ row, message: `${label} "${this.text(v)}" is too large — left empty` });
+      return undefined;
+    }
     if (!Number.isFinite(n) || n < 0) {
       issues.push({ row, message: `${label} "${this.text(v)}" is not a number — left empty` });
       return undefined;

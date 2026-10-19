@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AttendanceStatus, LeadStatus, Prisma, Role, UserStatus } from '@prisma/client';
+import { LeadStatus, Prisma, Role, UserStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { managerLeadScope } from '../../../common/utils/lead-scope.util';
@@ -100,7 +100,7 @@ export class DashboardService {
           const row = rowByUser.get(m.id);
           return {
             ...m,
-            attendance: row ? row.status : AttendanceStatus.ABSENT,
+            attendance: row ? row.status : null, // not checked in yet today
             checkInAt: row?.checkInAt ?? null,
             checkOutAt: row?.checkOutAt ?? null,
           };
@@ -141,7 +141,8 @@ export class DashboardService {
         where: { userId: actor.userId, date: { gte: businessStartOfMonth(), lte: businessDateOnly() } },
       }),
     ]);
-    return { today: today ?? { status: AttendanceStatus.ABSENT }, presentThisMonth };
+    // No row yet today means "not checked in yet", not absent — the day isn't over.
+    return { today: today ?? { status: null }, presentThisMonth };
   }
 
   private todayRange(): Prisma.DateTimeFilter {

@@ -1,0 +1,31 @@
+# Tulsi ERP API edge proxy (the `caddy` service in ../docker-compose.yml).
+#
+#   https://{$API_DOMAIN}  -> NestJS backend (backend:3000 on the Docker network)
+#
+# Caddy obtains and renews a Let's Encrypt certificate automatically once
+# API_DOMAIN points at this server (DNS only, not proxied through Cloudflare)
+# and ports 80/443 are open. Certificates live in the caddy_data volume — keep
+# it, or you will hit Let's Encrypt rate limits. CORS is handled by the backend.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	encode zstd gzip
+
+	# Largest upload the API accepts is a 50 MB WhatsApp document
+	# (MAX_OUTBOUND_DOCUMENT_BYTES); leave headroom for multipart overhead.
+	request_body {
+		max_size 60MB
+	}
+
+	# Caddy sets X-Forwarded-For / -Proto / -Host; the backend trusts one hop
+	# (TRUST_PROXY=1) so rate limits and logs see the real client IP.
+	reverse_proxy backend:3000
+}

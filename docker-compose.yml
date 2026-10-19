@@ -1,0 +1,134 @@
+# Tulsi ERP backend — production stack for a single VPS. See DEPLOYMENT.md.
+# (The frontend is deployed separately, on Cloudflare.)
+#
+#   caddy     HTTPS for API_DOMAIN (automatic Let's Encrypt), proxies to the backend  (ports 80/443)
+#   backend   NestJS API + Prisma; applies migrations on start                         (internal :3000)
+#   postgres  PostgreSQL 16                                                            (internal :5432)
+#
+# All settings come from ./.env (copy .env.production.example). Never run
+# `down -v`: it deletes the database, uploads and TLS certificates.
+
+name: tulsi-erp
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16.13-alpine3.22
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tulsi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-tulsi_erp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    shm_size: 256mb
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+  backend:
+    build:
+      context: .
+    restart: unless-stopped
+    # tini as PID 1: forwards SIGTERM and reaps zombies.
+    init: true
+    env_file: .env
+    # These override anything in .env: they are fixed by this topology.
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tulsi}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tulsi_erp}?schema=public
+      UPLOADS_DIR: /app/uploads
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS (the Cloudflare frontend URL) in .env}
+      WEBHOOK_BASE_URL: https://${API_DOMAIN:?Set API_DOMAIN in .env}
+      TRUST_PROXY: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+    networks:
+      - db
+      - edge
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First boot applies every migration before the server listens.
+      start_period: 90s
+    stop_grace_period: 30s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging: *logging
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      # Started, not healthy: TLS stays up (and answers 502) while the API restarts.
+      backend:
+        condition: service_started
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    logging: *logging
+
+networks:
+  # No internet access: only the backend can reach the database.
+  db:
+    internal: true
+  edge: {}
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:

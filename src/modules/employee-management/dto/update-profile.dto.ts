@@ -1,6 +1,7 @@
+import { StrongPassword } from '../../../common/validators/strong-password.decorator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsNotEmpty, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class UpdateProfileDto {
   @ApiProperty({ required: false, example: 'Ramesh Kumar' })
@@ -46,6 +47,6 @@ export class ChangePasswordDto {
   currentPassword!: string;
 
   @ApiProperty({ example: 'NewStrongPass123' })
-  @MinLength(8)
+  @StrongPassword()
   newPassword!: string;
 }

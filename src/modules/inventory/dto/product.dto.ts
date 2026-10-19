@@ -1,6 +1,7 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import { MAX_MONEY, MAX_QUANTITY } from '../../../common/utils/limits.util';
 
 export const PRODUCT_CATEGORIES = ['PLYWOOD', 'LAMINATE', 'BLOCKBOARD', 'MDF', 'HDHMR', 'VENEER', 'DOOR', 'HARDWARE', 'OTHER'] as const;
 export const PRODUCT_UNITS = ['SHEET', 'PIECE', 'BOX', 'SQFT', 'KG'] as const;
@@ -39,6 +40,7 @@ export class CreateProductDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(MAX_MONEY)
   price?: number;
 
   @ApiProperty({ required: false, example: 3100 })
@@ -46,6 +48,7 @@ export class CreateProductDto {
   @Type(() => Number)
   @IsNumber()
   @Min(0)
+  @Max(MAX_MONEY)
   costPrice?: number;
 
   @ApiProperty({ required: false, example: 120, description: 'Opening stock' })
@@ -53,6 +56,7 @@ export class CreateProductDto {
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(MAX_QUANTITY)
   stock?: number;
 
   @ApiProperty({ required: false, example: 20, description: 'Low-stock alert at or below this quantity' })
@@ -60,6 +64,7 @@ export class CreateProductDto {
   @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(MAX_QUANTITY)
   reorderLevel?: number;
 
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(1000) description?: string;
@@ -74,6 +79,8 @@ export class AdjustStockDto {
   @ApiProperty({ example: 50, description: 'Positive to add stock, negative to remove' })
   @Type(() => Number)
   @IsInt()
+  @Min(-MAX_QUANTITY)
+  @Max(MAX_QUANTITY)
   change!: number;
 
   @ApiProperty({ enum: STOCK_REASONS, example: 'RECEIVED' })

@@ -343,7 +343,7 @@ Requirements: Node.js 20+, PostgreSQL 14+.
 npm install                            # npm 12: bcrypt/prisma install scripts are pre-approved in package.json "allowScripts"
 cp .env.example .env                   # set DATABASE_URL (a dedicated Tulsi database), JWT_ACCESS_SECRET, CREDENTIALS_ENCRYPTION_KEY
 npx prisma migrate dev                 # create the tables
-npm run build && npx prisma db seed    # demo data (safe to run again)
+npm run build && npx prisma db seed    # Super Admin only (safe to run again)
 npm run start:dev                      # http://localhost:3000 — Swagger at /api/docs
 ```
 
@@ -357,25 +357,9 @@ npm run lint             # ESLint, check only (npm run lint:fix to fix)
 npm test                 # unit tests, including the lead RBAC tests
 ```
 
-### Demo accounts (from the seed)
+### First login
 
-Password: `Demo@1234`, or whatever `SEED_DEFAULT_PASSWORD` is set to.
-
-| Role | Email |
-|---|---|
-| Super Admin | `superadmin@tulsi-erp.local` |
-| Admin — Tulsi Plywood | `admin@tulsiplywood.local` |
-| Admin — Demo Wholesale | `demo.admin@tulsi-erp.local` |
-| Managers | `demo.manager1@tulsi-erp.local`, `demo.manager2@tulsi-erp.local` |
-| Callers | `demo.caller1@tulsi-erp.local` … `demo.caller4@tulsi-erp.local` |
-| Delivery Partners | `demo.driver1@tulsi-erp.local`, `demo.driver2@tulsi-erp.local` |
-
-The demo organization also gets:
-
-- 12 sample leads across sources and statuses, re-created on every seed run
-- two inactive integrations
-- yesterday's attendance for every caller
-- today's check-in for two callers
+The seed creates **only** the Super Admin, from `SUPERADMIN_EMAIL` (default `superadmin@tulsi-erp.local`) and `SUPERADMIN_PASSWORD` (required, no default). There are no demo accounts. Sign in to the Super Admin portal and create each organization and its Admin there; the Admin then creates managers and team members.
 
 ---
 
@@ -395,7 +379,7 @@ All keys are listed in [`.env.example`](.env.example). The important ones:
 | `AUTO_VERIFY_NEW_USERS` | `true` while testing without email: new users and organizations start verified |
 | `VAPID_*` | Web Push keys |
 | `CORS_ORIGINS` | Allowed frontend origins; the last one is used in email links |
-| `SEED_DEFAULT_PASSWORD` | Password for the demo accounts |
+| `SUPERADMIN_EMAIL`, `SUPERADMIN_PASSWORD` | The Super Admin account created by the seed |
 
 ---
 

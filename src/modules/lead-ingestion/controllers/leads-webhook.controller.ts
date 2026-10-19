@@ -17,6 +17,7 @@ import {
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { LeadsWebhookService } from '../services/leads-webhook.service';
 import { IncomingLeadWebhookDto } from '../dto/incoming-lead-webhook.dto';
 
@@ -29,6 +30,8 @@ export class LeadsWebhookController {
   constructor(private readonly leadsWebhookService: LeadsWebhookService) {}
 
   @Post('leads/:webhookToken')
+  // Public URL: cap floods (a relay or form posts far fewer than 120 leads a minute).
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Common lead URL for n8n / Pabbly / Zapier / Make relays and website forms' })
   @ApiBody({ type: IncomingLeadWebhookDto })
@@ -67,6 +70,8 @@ export class LeadsWebhookController {
   }
 
   @Post('meta/leadgen')
+  // Signed by Meta and sent from Meta's servers in bursts — never rate limited.
+  @SkipThrottle()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Meta Lead Ads webhook — signed with META_APP_SECRET, routed by page_id' })
   async receiveMeta(

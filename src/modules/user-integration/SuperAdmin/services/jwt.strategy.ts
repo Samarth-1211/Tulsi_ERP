@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import { Role } from '@prisma/client';
+import { Role, UserStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../../../../common/decorators/current-user.decorator';
+import { PrismaService } from '../../../../prisma/prisma.service';
 
 interface AccessTokenPayload {
   sub: string;
@@ -14,15 +15,28 @@ interface AccessTokenPayload {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
-  constructor(configService: ConfigService) {
+  constructor(
+    configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_ACCESS_SECRET', 'dev-access-secret'),
+      secretOrKey: configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
     });
   }
 
-  validate(payload: AccessTokenPayload): AuthenticatedUser {
+  async validate(payload: AccessTokenPayload): Promise<AuthenticatedUser> {
+    // A signed token is not enough: a deactivated/deleted user or a suspended
+    // org must lose access at once, not when the token expires.
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { status: true, deletedAt: true, org: { select: { isActive: true } } },
+    });
+    if (!user || user.status !== UserStatus.ACTIVE || user.deletedAt || (user.org && !user.org.isActive)) {
+      throw new UnauthorizedException('Your session has ended. Please sign in again.');
+    }
+
     return {
       userId: payload.sub,
       email: payload.email,
