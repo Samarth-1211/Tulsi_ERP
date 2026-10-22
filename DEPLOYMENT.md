@@ -139,7 +139,7 @@ git push origin main
 ```
 `.env`, `uploads/`, `dist/`, `backups/` and `deploy-history.log` are git-ignored. `.env*` and `uploads/` are also excluded from the Docker image.
 
-> **CI note.** On push to `main`, the `deploy` job SSHes to the VPS and runs `bash scripts/deploy.sh` in `/opt/tulsi-erp`. Until the repo secrets `VPS_HOST`, `VPS_USER` and `VPS_SSH_KEY` are set and the server is prepared (§5–6), that job **fails**. That's harmless, but expect a red ✗. Remove the `deploy:` job if you prefer manual deploys.
+> **CI note.** On push to `main`, the `deploy` job SSHes to the VPS and runs `bash scripts/deploy.sh` in `/opt/tulsi-erp`. It needs the repo secrets `VPS_HOST` (server IP), `VPS_USER` (`deploy`) and `VPS_SSH_KEY` (a private key whose public half is in that user's `~/.ssh/authorized_keys`), plus `VPS_PORT` if SSH isn't on 22. Before deploying, the job checks the secrets, that the server answers, that the key is accepted and that `/opt/tulsi-erp/scripts/deploy.sh` exists; after deploying, it checks the commit and `prisma migrate status`. Any failure shows a titled error (e.g. "SSH login refused") on the run's summary page. A key just for GitHub, on the server as `deploy`: `ssh-keygen -t ed25519 -f ~/.ssh/github_actions -N ""`, `cat ~/.ssh/github_actions.pub >> ~/.ssh/authorized_keys`, then paste `cat ~/.ssh/github_actions` into `VPS_SSH_KEY`. Remove the `deploy:` job if you prefer manual deploys.
 
 ---
 

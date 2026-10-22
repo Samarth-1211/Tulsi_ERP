@@ -25,20 +25,79 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # Server setup: DEPLOYMENT.md. deploy.sh backs up, pulls, rebuilds and waits for
+  # health; the backend container applies migrations on start. Each check below
+  # fails with a titled error on the run's summary page, so a red run says why
+  # without opening the logs.
   deploy:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      APP_DIR: /opt/tulsi-erp
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT }} # optional, default 22
     steps:
-      - name: SSH in and redeploy
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          # Server setup: DEPLOYMENT.md. deploy.sh backs up, pulls, rebuilds and
-          # waits for health; the backend container applies migrations on start.
-          script: |
-            set -e
-            cd /opt/tulsi-erp
-            bash scripts/deploy.sh
+      - name: Check the deploy secrets
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$VPS_HOST" ] || missing="$missing VPS_HOST"
+          [ -n "$VPS_USER" ] || missing="$missing VPS_USER"
+          [ -n "$VPS_SSH_KEY" ] || missing="$missing VPS_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy secrets missing::Add these repository secrets in Settings > Secrets and variables > Actions:$missing (DEPLOYMENT.md, CI note)."
+            exit 1
+          fi
+          case "$VPS_SSH_KEY" in
+            *"PRIVATE KEY-----"*) ;;
+            *)
+              echo "::error title=VPS_SSH_KEY is not a private key::Paste the whole private key, including the BEGIN and END ... PRIVATE KEY lines - not the .pub file."
+              exit 1 ;;
+          esac
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Check the server accepts the login
+        run: |
+          port="${VPS_PORT:-22}"
+          ssh-keyscan -p "$port" -T 15 "$VPS_HOST" > ~/.ssh/known_hosts 2>/dev/null || true
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error title=Server not reachable::Nothing answered SSH at VPS_HOST port $port. Check VPS_HOST is the server's IP, add a VPS_PORT secret if SSH isn't on 22, and check the firewall."
+            exit 1
+          fi
+          if ! out=$(ssh -i ~/.ssh/deploy_key -p "$port" -o BatchMode=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" \
+              "test -f $APP_DIR/scripts/deploy.sh && echo APP_READY || echo APP_MISSING" 2>&1); then
+            echo "::error title=SSH login refused::The server did not accept VPS_SSH_KEY for user VPS_USER. Add the key's public half to ~/.ssh/authorized_keys of that user. ssh said: $(echo "$out" | tail -n1)"
+            exit 1
+          fi
+          if ! echo "$out" | grep -q APP_READY; then
+            echo "::error title=App folder not found::Logged in, but $APP_DIR/scripts/deploy.sh is not on the server. Clone the repo to $APP_DIR (DEPLOYMENT.md section 6)."
+            exit 1
+          fi
+          echo "Login OK and $APP_DIR is ready."
+
+      - name: Deploy
+        run: |
+          set -o pipefail
+          if ! ssh -i ~/.ssh/deploy_key -p "${VPS_PORT:-22}" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+              "cd $APP_DIR && bash scripts/deploy.sh" 2>&1 | tee deploy.log; then
+            echo "::error title=deploy.sh failed::$(grep -E 'ERROR|error' deploy.log | tail -n1 || tail -n1 deploy.log)"
+            exit 1
+          fi
+
+      - name: Check the deploy
+        run: |
+          set -o pipefail
+          ssh -i ~/.ssh/deploy_key -p "${VPS_PORT:-22}" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+            "cd $APP_DIR && git log -1 --oneline && docker compose exec -T backend ./node_modules/.bin/prisma migrate status" 2>&1 | tee check.log \
+            || { echo "::error title=Migrations not applied::$(tail -n1 check.log)"; exit 1; }
+          running=$(head -n1 check.log | cut -d' ' -f1)
+          case "$GITHUB_SHA" in
+            "$running"*) ;;
+            *) echo "::warning title=Server is on another commit::The server checkout is at $running, this run is ${GITHUB_SHA::7}." ;;
+          esac
+          echo "::notice title=Deployed::Server at $running; database migrations up to date."
