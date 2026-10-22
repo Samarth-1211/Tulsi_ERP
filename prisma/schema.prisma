@@ -114,6 +114,30 @@ enum FollowUpStatus {
   CANCELLED
 }
 
+// Automated Task Allotment — which old leads qualify for a caller's after-work batch.
+enum AllotmentEligibility {
+  NOT_CONNECTED // the latest follow-up was logged as NO_ANSWER
+  CONTACTED_OPEN // contacted at least once and not converted yet
+}
+
+// Automated Task Allotment — how the qualifying leads are ranked (first = called first).
+enum AllotmentPriority {
+  SMART // blended score: lead value, days since last contact, fewest attempts
+  HIGHEST_VALUE
+  LONGEST_SILENT // longest since the last contact
+  NEWEST_ENQUIRY
+  OLDEST_ENQUIRY // about to leave the look-back window
+  FEWEST_ATTEMPTS
+  MOST_ENGAGED // most follow-ups logged so far
+}
+
+enum AllotmentStatus {
+  PENDING
+  DONE // the caller logged a follow-up or changed the lead's status
+  SKIPPED
+  EXPIRED // left untouched when the day ended
+}
+
 enum AttendanceStatus {
   CHECKED_IN
   CHECKED_OUT
@@ -134,6 +158,10 @@ enum NotificationType {
   LEAD_UPDATED
   // A lead was deleted — sent to the org's Admins (and its assignee) with a snapshot of what was removed.
   LEAD_DELETED
+  // Automated Task Allotment built today's batch of old leads for this user.
+  TASK_ALLOTTED
+  // Someone shared a planned trip with this user.
+  TRIP_SHARED
 }
 
 enum UserAuditAction {
@@ -292,6 +320,7 @@ model Organization {
   assignments   LeadAssignment[]
   activities    LeadActivityLog[]
   followUps     FollowUp[]
+  allotments    TaskAllotment[]
   notifications Notification[]
   auditLogs     OrganizationAuditLog[]
 
@@ -309,6 +338,7 @@ model Organization {
   employeeActivities EmployeeActivity[]
   tasks              Task[]
   verificationTokens VerificationToken[]
+  trips              Trip[]
 }
 
 model OrgSettings {
@@ -321,8 +351,24 @@ model OrgSettings {
   timezone                 String         @default("Asia/Kolkata")
   // RCRM-kept: reassign a lead to someone else the instant it is marked LOST.
   autoReallocateLostLeads  Boolean        @default(false)
-  createdAt                DateTime       @default(now())
-  updatedAt                DateTime       @updatedAt
+
+  // Automated Task Allotment: once a caller has no untouched leads and no
+  // follow-ups due today, they get a batch of their own older leads to call again.
+  autoAllotEnabled      Boolean              @default(true)
+  autoAllotBatchSize    Int                  @default(15)
+  autoAllotLookbackDays Int                  @default(30) // rolling window on lead.createdAt
+  autoAllotRestDays     Int                  @default(2) // skip leads contacted more recently than this
+  autoAllotMinValue     Decimal?             @db.Decimal(12, 2) // only leads worth at least this (null = any)
+  autoAllotIncludeLost  Boolean              @default(false)
+  autoAllotEligibility  AllotmentEligibility @default(NOT_CONNECTED)
+  autoAllotPriority     AllotmentPriority    @default(SMART)
+  autoAllotThenBy       AllotmentPriority    @default(LONGEST_SILENT) // tie-breaker
+
+  // Which in-app notifications are also emailed to the user (EmailNotificationService).
+  emailNotificationTypes NotificationType[] @default([LEAD_ASSIGNED, TASK_ASSIGNED, TASK_REMINDER, TASK_ALLOTTED, TRIP_SHARED])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 }
@@ -354,6 +400,7 @@ model User {
   isTemporaryPassword Boolean   @default(false)
   photoUrl            String?
   leadsSeenAt         DateTime  @default(now())
+  emailNotifications  Boolean   @default(true) // the user's own switch for CRM update emails
 
   org          Organization? @relation(fields: [orgId], references: [id])
   manager      User?         @relation("ManagerTeam", fields: [managerId], references: [id])
@@ -370,6 +417,7 @@ model User {
   assignmentsBy   LeadAssignment[]  @relation("AssignmentBy")
   activities      LeadActivityLog[]
   followUps       FollowUp[]
+  allotments      TaskAllotment[]
   notifications   Notification[]
 
   auditLogsPerformed    UserAuditLog[]         @relation("AuditPerformedBy")
@@ -392,6 +440,8 @@ model User {
   verificationTokens       VerificationToken[]
   passwordResetOtps        PasswordResetOtp[]
   pushSubscriptions        PushSubscription[]
+  tripsCreated             Trip[]                   @relation("TripCreatedBy")
+  tripMemberships          TripMember[]
 
   @@unique([orgId, employeeCode])
   @@index([orgId, role, status])
@@ -538,6 +588,7 @@ model Lead {
   assignments   LeadAssignment[]
   activities    LeadActivityLog[]
   followUps     FollowUp[]
+  allotments    TaskAllotment[]
   webhookEvents WebhookEvent[]
   notifications Notification[]
 
@@ -557,17 +608,93 @@ model Lead {
 
 // Every distinct lead city of an org — feeds the Leads "City" filter dropdown.
 // Upserted whenever a lead is created or its city edited; never removed.
+// Located on the map by CityGeocodingService (OpenStreetMap). A misspelling it
+// corrects ("Devas" → "Dewas") is renamed — or merged into the existing city —
+// and the typed spelling kept in `aliases`; its leads are renamed to match.
 model City {
   id        String   @id @default(uuid())
   orgId     String
-  name      String // display form, as first seen (trimmed)
+  name      String // display form: as first seen (trimmed), or the corrected spelling
   key       String // lower(trim(name)) — dedup key, so "indore" and "Indore" are one city
   createdAt DateTime @default(now())
+
+  lat         Float?
+  lng         Float?
+  state       String?
+  geoStatus   CityGeoStatus @default(PENDING)
+  geoAttempts Int           @default(0)
+  geocodedAt  DateTime?
+  aliases     String[]      @default([]) // other lower-case spellings that mean this city
 
   org Organization @relation(fields: [orgId], references: [id])
 
   @@unique([orgId, key])
+  @@index([geoStatus])
   @@map("cities")
+}
+
+enum CityGeoStatus {
+  PENDING
+  FOUND
+  NOT_FOUND // the admin places it by hand
+  MANUAL // placed or renamed by an admin — never re-geocoded
+}
+
+enum TripStatus {
+  PLANNED
+  COMPLETED
+  CANCELLED
+}
+
+// Which leads a trip shows: still open, already customers, or both.
+enum TripLeadFilter {
+  OPEN
+  CONVERTED
+  ALL
+}
+
+// A planned sales trip: stops on the road, the lead cities picked along it,
+// and the people it is shared with.
+model Trip {
+  id          String         @id @default(uuid())
+  orgId       String
+  name        String
+  tripDate    DateTime?      @db.Date
+  status      TripStatus     @default(PLANNED)
+  notes       String?
+  createdById String
+  stops       Json // [{ name, lat, lng }] in travel order
+  corridorKm  Int            @default(20) // how far off the road a city may be
+  leadFilter  TripLeadFilter @default(OPEN)
+  includeLost Boolean        @default(false) // also show leads marked LOST
+  cityIds     String[] // the picked cities, in route order
+  distanceKm  Float?
+  durationMin Float?
+  routeSource String? // osrm | straight
+  geometry    Json? // simplified [[lat, lng], …] for the map
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  org       Organization @relation(fields: [orgId], references: [id])
+  createdBy User         @relation("TripCreatedBy", fields: [createdById], references: [id])
+  members   TripMember[]
+  tasks     Task[]
+
+  @@index([orgId, createdById])
+  @@map("trips")
+}
+
+model TripMember {
+  tripId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([tripId, userId])
+  @@index([userId])
+  @@map("trip_members")
 }
 
 model LeadAdAttribution {
@@ -660,6 +787,31 @@ model FollowUp {
   @@index([leadId])
 }
 
+// Automated Task Allotment: one old lead handed to a caller for one business
+// day (built on demand by TaskAllotmentService once their day's work is done).
+model TaskAllotment {
+  id          String          @id @default(uuid())
+  orgId       String
+  userId      String
+  leadId      String
+  allotDate   DateTime        @db.Date // org-local calendar day
+  rank        Int // 1 = call first
+  status      AllotmentStatus @default(PENDING)
+  outcome     String? // follow-up outcome or new lead status that closed it
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id])
+  user User         @relation(fields: [userId], references: [id])
+  lead Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, leadId, allotDate])
+  @@index([orgId, allotDate])
+  @@index([userId, allotDate])
+  @@index([leadId, status])
+  @@map("task_allotments")
+}
+
 // ─────────────────── NOTIFICATIONS & AUDIT (RCRM's models) ───────────────────
 
 // In-app notification shown to a user: task reminders (created by the cron
@@ -690,10 +842,15 @@ model Notification {
   // subscribed devices, or skipped as stale). Null = not dispatched yet.
   pushedAt DateTime?
 
+  // When the email dispatcher picked this notification up (emailed, or
+  // skipped by preference / staleness). Null = not dispatched yet.
+  emailedAt DateTime?
+
   createdAt DateTime @default(now())
 
   @@index([userId, isRead, createdAt])
   @@index([pushedAt, createdAt])
+  @@index([emailedAt, createdAt])
   @@index([taskId])
   @@index([leadId])
   @@map("notifications")
@@ -1145,6 +1302,10 @@ model Task {
   leadId String?
   lead   Lead?   @relation(fields: [leadId], references: [id])
 
+  // Set for the site visits a planned trip was saved as.
+  tripId String?
+  trip   Trip?   @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
   status      TaskStatus @default(PENDING)
   completedAt DateTime?
 
@@ -1163,6 +1324,7 @@ model Task {
   @@index([userId, status, dueAt])
   @@index([createdById, userId])
   @@index([leadId])
+  @@index([tripId])
   @@map("tasks")
 }
 
@@ -1194,19 +1356,19 @@ model Product {
 
   name         String
   sku          String? // unique per org when present
-  category     String  @default("PLYWOOD") // PLYWOOD, LAMINATE, BLOCKBOARD, MDF, HDHMR, VENEER, DOOR, HARDWARE, OTHER
+  category     String   @default("PLYWOOD") // PLYWOOD, LAMINATE, BLOCKBOARD, MDF, HDHMR, VENEER, DOOR, HARDWARE, OTHER
   brand        String?
   grade        String? // MR, BWR, BWP, Marine, Commercial…
   thickness    String? // e.g. "18mm"
   size         String? // e.g. "8x4 ft"
-  unit         String  @default("SHEET") // SHEET, PIECE, BOX, SQFT, KG
-  price        Decimal @default(0) @db.Decimal(12, 2) // selling price per unit
+  unit         String   @default("SHEET") // SHEET, PIECE, BOX, SQFT, KG
+  price        Decimal  @default(0) @db.Decimal(12, 2) // selling price per unit
   costPrice    Decimal? @db.Decimal(12, 2)
-  stock        Int     @default(0)
-  reorderLevel Int     @default(0) // low-stock alert at or below this
+  stock        Int      @default(0)
+  reorderLevel Int      @default(0) // low-stock alert at or below this
   description  String?
   searchKey    String? // phonetic key of name + brand (Hindi/English search) — set by PrismaService
-  isActive     Boolean @default(true)
+  isActive     Boolean  @default(true)
 
   createdById String?
   deletedAt   DateTime?

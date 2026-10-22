@@ -345,6 +345,46 @@ Template columns: Customer Name*, Mobile No.* (comma-separated → main + altern
 
 Round robin: active, non-deleted users of `allocationTargetRole` (`MANAGER` or `CALLER`) in the org, not on approved leave (and, with `allocateOnlyCheckedIn`, with a `CHECKED_IN` attendance row today); the one with the oldest `lastLeadAssignedAt` (never-assigned first) wins, picked under a row lock so parallel webhooks never double-assign. No candidate → the lead stays `NEW` and the org's Admins get an "Action needed" notification. `MANUAL` mode leaves new leads unassigned.
 
+### 9.1 Automated Task Allotment
+
+| Method | Endpoint | Roles | Description |
+|---|---|---|---|
+| `GET` | `/task-allotment/me` | ADMIN, MANAGER, CALLER | Today's allotted old leads; builds the batch on first call once the day's work is done |
+| `PATCH` | `/task-allotment/:id/skip` | ADMIN, MANAGER, CALLER | Skip one of today's allotted leads |
+| `GET` | `/task-allotment/overview` | ADMIN, MANAGER | Per person: today's progress, and allotted / done / converted over the look-back window (Manager: self + team) |
+| `GET` | `/settings/task-allotment` | ADMIN | Current settings |
+| `PATCH` | `/settings/task-allotment` | ADMIN | Update |
+
+```json
+{ "autoAllotEnabled": true, "autoAllotBatchSize": 15, "autoAllotLookbackDays": 30, "autoAllotRestDays": 2, "autoAllotMinValue": null,
+  "autoAllotIncludeLost": false, "autoAllotEligibility": "NOT_CONNECTED", "autoAllotPriority": "SMART", "autoAllotThenBy": "LONGEST_SILENT" }
+```
+
+"Day done" = the user holds no `NEW`/`ASSIGNED` leads and no pending follow-up due by tonight. Then their own leads qualify when they came in within `autoAllotLookbackDays` (rolling), are `IN_PROGRESS` (plus `LOST` with `autoAllotIncludeLost`), were contacted, have no pending follow-up, were last touched at least `autoAllotRestDays` ago, are worth at least `autoAllotMinValue` (when set), and — for `NOT_CONNECTED` — whose latest follow-up outcome is `NO_ANSWER` (`CONTACTED_OPEN`: any). Ranked by `autoAllotPriority`, ties by `autoAllotThenBy`: `SMART` (0.5 value + 0.3 silence + 0.2 few attempts, scaled within the set), `HIGHEST_VALUE`, `LONGEST_SILENT`, `NEWEST_ENQUIRY`, `OLDEST_ENQUIRY`, `FEWEST_ATTEMPTS`, `MOST_ENGAGED`. One batch per user per business day (`task_allotments`); a follow-up or status change on the lead marks its row `DONE`, untouched rows become `EXPIRED` the next day.
+
+### 9.2 Trip planner
+
+| Method | Endpoint | Roles | Description |
+|---|---|---|---|
+| `GET` | `/trips/places?q=` | ADMIN, MANAGER, CALLER | From / To / stop search: the org's located lead cities, then towns from OpenStreetMap (Photon) |
+| `GET` | `/trips/cities?leadFilter=` | ADMIN, MANAGER, CALLER | Every located lead city with counts `{ total, open, converted, due, value }`; `notOnMap` lists cities not placed yet |
+| `POST` | `/trips/plan` | ADMIN, MANAGER, CALLER | `{ stops: [{ name, lat, lng }…], corridorKm?, leadFilter?, includeLost? }` → road route (OSRM); lead `cities` within `corridorKm` in travel order (`alongKm`, `offKm`, `zone`: `start` / `route` / `end`); `detours` up to 120 km off the road with rough `extraKm` / `extraMin`, most leads per extra km first |
+| `POST` | `/trips/optimise` | ADMIN, MANAGER, CALLER | `{ stops }` (2–25) → the same stops in the shortest driving order, first and last kept (OSRM trip service; nearest-next if unreachable), with `before` / `after` km and minutes |
+| `POST` | `/trips/leads` | ADMIN, MANAGER, CALLER | `{ cityIds, leadFilter? }` → your leads grouped by city, in that order |
+| `GET` | `/trips/share-candidates` | ADMIN, MANAGER, CALLER | Active people in the org a trip can be shared with |
+| `GET/POST` | `/trips` | list: all roles · save: lead roles | Trips you planned or that were shared with you (Admin: all) / save one |
+| `GET` | `/trips/:id`, `/trips/:id/leads` | planner, Admin, people it is shared with | The trip; its leads as the planner sees them |
+| `PATCH/DELETE` | `/trips/:id` | planner or Admin | Change (new stops re-route) / delete (visit tasks stay) |
+| `POST` | `/trips/:id/share` | planner or Admin | `{ userIds }` replaces the list; newly added people get `TRIP_SHARED` |
+| `POST` | `/trips/:id/tasks` | planner, Admin, people it is shared with | `{ userId? }` → one `SITE_VISIT` task per lead, due 11:00 IST on the trip day; people it is shared with can only take it on themselves; repeats skip leads already tasked |
+| `GET` | `/cities` | ADMIN | Lead cities with map location, `geoStatus`, `aliases`, lead count |
+| `PATCH` | `/cities/:id` | ADMIN | `{ name?, lat?, lng? }` — rename and/or place by hand (`MANUAL`); renaming onto an existing city merges them |
+| `POST` | `/cities/:id/locate` | ADMIN | Look it up again |
+
+`leadFilter`: `OPEN` (default), `CONVERTED` (customers) or `ALL` (both); `includeLost: true` adds LOST leads (saved on the trip). Sharing a trip shows the people it is shared with the trip's leads (name, phone, address, requirement) as its planner sees them — delivery partners included — but opening a lead still follows the usual lead scope.
+
+City locations: every 20 s `CityGeocodingService` takes a few `PENDING` cities (English-script names first) and (1) merges a city that sounds like one already located in the org (`phoneticKey`: "Devas" ≈ "Dewas" ≈ "देवास"), else (2) searches Nominatim for towns/villages in the org's state, then (3) sound-alike spelling variants (v↔w, ee↔i, doubled letters…). Matches more than 400 km from the org's base (the median of its located cities, or its own city) are ignored. A corrected spelling renames the city — or merges it into the existing one — keeps the typed spelling in `aliases`, and renames its leads; OSM's alternate names don't rename ("Mhow" stays Mhow). Three misses → `NOT_FOUND` for an Admin to place. Routing falls back to a straight line (`routeSource: "straight"`) when OSRM is unreachable. Base URLs: `NOMINATIM_URL`, `PHOTON_URL`, `OSRM_URL` (public OSM servers by default — fine for an office's use; host your own for heavy traffic).
+
 ## 10. Lead sources and webhooks
 
 Every source calls `LeadIngestionService.ingest()` (DB doc §5): phone normalized to E.164 (default +91; invalid → rejected), open lead with the same phone → `RE_ENQUIRY`, else create lead + attribution + `CREATED` activity, then allocate (explicit → `MANUAL`, Caller/Manager creator → `SELF`, else round robin) and notify.
@@ -432,9 +472,13 @@ A first message from a new number (or a fresh ad tap) goes through `ingest()`: w
 | `GET` | `/notifications`, `/notifications/unread-count` | Bell |
 | `PATCH` | `/notifications/:id/read`, `/notifications/read-all` | Mark read |
 | `GET/POST` | `/notifications/push/public-key`, `/push/subscribe`, `/push/unsubscribe`, `/push/test` | Web push |
+| `GET/PATCH` | `/notifications/email-preference` | The caller's own email on/off (`{ enabled }`) |
+| `GET/PATCH` | `/settings/notifications` | ADMIN: which types are emailed (`{ emailNotificationTypes: [...] }`; default `LEAD_ASSIGNED`, `TASK_ASSIGNED`, `TASK_REMINDER`, `TASK_ALLOTTED`) |
 | `POST/GET/PATCH/DELETE` | `/tasks`, `/tasks/me`, `/tasks/assigned-by-me`, `/tasks/:id`, `/tasks/:id/complete` | Personal / assigned tasks with reminders |
 
 Lead events are delivered the RCRM way — notification rows (bell) + web push, no socket: new lead → org Admins + the assignee's Manager (`LEAD_CAPTURED`) and the assignee (`LEAD_ASSIGNED`); reassignment → new assignee; field edits → Admins + assignee + their Manager (`LEAD_UPDATED`); re-enquiry and manager notes → assignee.
+
+Email: every minute `EmailNotificationService` claims un-emailed notification rows (`emailedAt IS NULL`, `FOR UPDATE SKIP LOCKED`) and sends each active, verified user who keeps emails on one email for the types their org picked — the update itself, or a digest (up to 10 listed) when several arrived together. Rows older than 6 hours, or when SMTP isn't configured, are only marked. Links use the last `CORS_ORIGINS` entry as the frontend URL.
 
 ## 12. Inventory (products + stock)
 

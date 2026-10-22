@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   ActivityType,
+  AllotmentStatus,
   AssignmentMethod,
   LeadStatus,
   LeaveStatus,
@@ -239,6 +240,10 @@ export class UserDeletionService {
       await tx.task.updateMany({
         where: { userId: id, status: TaskStatus.PENDING },
         data: workOwner ? { userId: workOwner.id } : { status: TaskStatus.CANCELLED },
+      });
+      await tx.taskAllotment.updateMany({
+        where: { userId: id, status: AllotmentStatus.PENDING },
+        data: { status: AllotmentStatus.EXPIRED },
       });
 
       // --- Move the team ----------------------------------------------------

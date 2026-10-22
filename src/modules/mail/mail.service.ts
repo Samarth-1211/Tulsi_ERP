@@ -3,18 +3,40 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { MailDeliveryException } from './mail-delivery.exception';
 import {
-  PLATFORM_NAME,
+  PRODUCT_NAME,
   escapeHtml as esc,
   button,
   credentialsPanel,
   fallbackLink,
+  featureGrid,
   greeting,
   note,
   organizationShell,
   otpPanel,
   paragraph,
   platformShell,
+  steps,
+  updateList,
 } from './mail-templates';
+
+/** One CRM update in a notification email. */
+export interface NotificationEmailItem {
+  label: string;
+  title: string;
+  message: string;
+  url: string;
+}
+
+interface NotificationDigestParams {
+  to: string;
+  name: string;
+  orgName: string;
+  items: NotificationEmailItem[];
+  /** Updates left out of `items` to keep the email short. */
+  moreCount: number;
+  /** The Notifications page — every update, and the email on/off switch. */
+  allUrl: string;
+}
 
 /**
  * Outcome of a send that must not abort its caller — see MailService.attempt.
@@ -111,7 +133,7 @@ export class MailService {
     const port = this.configService.get<number>('SMTP_PORT', 587);
     const user = this.configService.get<string>('SMTP_USER');
     const pass = this.configService.get<string>('SMTP_PASS');
-    this.defaultFromName = this.configService.get<string>('SMTP_FROM_NAME', `${PLATFORM_NAME} CRM`);
+    this.defaultFromName = this.configService.get<string>('SMTP_FROM_NAME', PRODUCT_NAME);
     this.fromEmail = this.configService.get<string>('SMTP_FROM_EMAIL', user ?? '');
 
     this.configured = Boolean(host && user && pass);
@@ -182,40 +204,56 @@ export class MailService {
 
   /**
    * Super Admin onboarding a brand-new organization. This is the one email the
-   * platform sends in its own name, so it carries TDM Groups branding rather
-   * than the organization's.
+   * platform sends in its own name, so it carries TDM Groups ERP branding
+   * rather than the organization's.
    */
   async sendOrgAdminInvite(params: OrgAdminInviteParams): Promise<void> {
     const html = platformShell({
-      preheader: `${params.orgName} is registered — verify your account to get started.`,
-      heading: `Welcome to the CRM by ${PLATFORM_NAME}`,
+      preheader: `${params.orgName} is live on ${PRODUCT_NAME} — verify your account to get started.`,
+      eyebrow: 'Welcome aboard',
+      heading: `${params.orgName} is now on ${PRODUCT_NAME}`,
       bodyHtml: [
         greeting(params.adminName),
         paragraph(
-          `Great to have you on board. <strong>${esc(params.orgName)}</strong> is now registered on the ${PLATFORM_NAME} CRM — your one-stop solution for all real estate operations.`,
+          `Great to have you with us. <strong>${esc(params.orgName)}</strong> is now set up on <strong>${PRODUCT_NAME}</strong> — one place to run your wholesale business: capture and assign leads, chat with customers on WhatsApp, and keep your whole team on track.`,
         ),
-        paragraph('Verify your account below to activate the organization, then add your team and start tracking leads from day one.'),
+        paragraph('You are the administrator for your organization. Here is how to get going:'),
+        steps([
+          'Verify your account with the button below.',
+          'Sign in with the details here and set your own password.',
+          'Add your managers, callers, delivery and warehouse staff.',
+        ]),
         credentialsPanel(params.to, params.tempPassword),
-        button('Verify my account', params.verifyUrl),
+        button('Verify & activate', params.verifyUrl),
+        featureGrid([
+          { icon: '&#127919;', title: 'Leads', text: 'Capture, dedupe and auto-assign every enquiry.' },
+          { icon: '&#128172;', title: 'WhatsApp', text: 'One shared inbox for customer chats.' },
+          { icon: '&#128101;', title: 'Team', text: 'Attendance, targets, tasks and leave.' },
+        ]),
         note('This link is valid for 24 hours. Please change your temporary password once you have signed in.'),
         fallbackLink(params.verifyUrl),
       ].join(''),
     });
 
-    await this.send(params.to, `Welcome to the ${PLATFORM_NAME} CRM — verify ${params.orgName}`, html);
+    await this.send(params.to, `Welcome to ${PRODUCT_NAME} — activate ${params.orgName}`, html);
   }
 
   /** An organization inviting one of its own managers or team members. */
   async sendTeamMemberInvite(params: TeamMemberInviteParams): Promise<void> {
     const html = organizationShell(params.orgName, {
-      preheader: `Your ${params.orgName} CRM account is ready — verify to sign in.`,
-      heading: `You're now part of the ${params.orgName} team`,
+      preheader: `Your ${params.orgName} account is ready — verify to sign in.`,
+      eyebrow: "You're invited",
+      heading: `Welcome to the ${params.orgName} team`,
       bodyHtml: [
         greeting(params.name),
         paragraph(
-          `You've been added as <strong>${esc(params.roleLabel)}</strong> on the <strong>${esc(params.orgName)}</strong> CRM. Your account is ready and waiting.`,
+          `You've been added as <strong>${esc(params.roleLabel)}</strong> at <strong>${esc(params.orgName)}</strong> on ${PRODUCT_NAME}. Your account is ready and waiting.`,
         ),
-        paragraph('Verify your account below, sign in with the credentials here, and you can get straight to work.'),
+        steps([
+          'Verify your account with the button below.',
+          'Sign in with the details here.',
+          'Set your own password and get straight to work.',
+        ]),
         credentialsPanel(params.to, params.tempPassword),
         button('Verify my account', params.verifyUrl),
         note('This link is valid for 24 hours. Please change your temporary password after your first sign-in.'),
@@ -223,7 +261,7 @@ export class MailService {
       ].join(''),
     });
 
-    await this.send(params.to, `${params.orgName} — verify your CRM account`, html, this.orgFromName(params.orgName));
+    await this.send(params.to, `${params.orgName} — verify your account`, html, this.orgFromName(params.orgName));
   }
 
   /**
@@ -239,13 +277,13 @@ export class MailService {
       paragraph(
         fromPlatform
           ? `A quick reminder that your admin account for <strong>${esc(params.orgName)}</strong> is still waiting to be verified.`
-          : `A quick reminder that your <strong>${esc(params.orgName)}</strong> CRM account is still waiting to be verified.`,
+          : `A quick reminder that your <strong>${esc(params.orgName)}</strong> account on ${PRODUCT_NAME} is still waiting to be verified.`,
       ),
       paragraph('Verify below and you can sign in right away. It only takes a moment.'),
       button('Verify my account', params.verifyUrl),
       note(
         fromPlatform
-          ? `This link is valid for 24 hours. If you no longer have your temporary password, reply to your ${PLATFORM_NAME} contact and we'll reissue it.`
+          ? `This link is valid for 24 hours. If you no longer have your temporary password, reach out to your ${PRODUCT_NAME} contact and we'll reissue it.`
           : "This link is valid for 24 hours. If you no longer have your temporary password, ask your administrator to resend the invite.",
       ),
       fallbackLink(params.verifyUrl),
@@ -254,20 +292,22 @@ export class MailService {
     const html = fromPlatform
       ? platformShell({
           preheader: `${params.orgName} is not verified yet — one click to finish.`,
-          heading: 'Just one step left to verify',
+          eyebrow: 'Action needed',
+          heading: 'Just one step left',
           bodyHtml,
         })
       : organizationShell(params.orgName, {
-          preheader: `Your ${params.orgName} CRM account is not verified yet.`,
-          heading: 'Just one step left to verify',
+          preheader: `Your ${params.orgName} account is not verified yet.`,
+          eyebrow: 'Action needed',
+          heading: 'Just one step left',
           bodyHtml,
         });
 
     await this.send(
       params.to,
       fromPlatform
-        ? `Reminder: verify your ${PLATFORM_NAME} CRM account for ${params.orgName}`
-        : `Reminder: verify your ${params.orgName} CRM account`,
+        ? `Reminder: verify your ${PRODUCT_NAME} account for ${params.orgName}`
+        : `Reminder: verify your ${params.orgName} account`,
       html,
       fromPlatform ? undefined : this.orgFromName(params.orgName),
     );
@@ -281,8 +321,8 @@ export class MailService {
       greeting(params.name),
       paragraph(
         orgName
-          ? `The login email for your <strong>${esc(orgName)}</strong> CRM account was changed to <strong>${esc(params.to)}</strong>.`
-          : `The login email for your CRM account was changed to <strong>${esc(params.to)}</strong>.`,
+          ? `The login email for your <strong>${esc(orgName)}</strong> account was changed to <strong>${esc(params.to)}</strong>.`
+          : `The login email for your ${PRODUCT_NAME} account was changed to <strong>${esc(params.to)}</strong>.`,
       ),
       paragraph('Please confirm this is your email address. You will need to verify it before you can sign in again.'),
       button('Verify my new email', params.verifyUrl),
@@ -292,12 +332,14 @@ export class MailService {
 
     const html = orgName
       ? organizationShell(orgName, {
-          preheader: 'Confirm your new CRM login email.',
+          preheader: 'Confirm your new login email.',
+          eyebrow: 'Account security',
           heading: 'Verify your new email address',
           bodyHtml,
         })
       : platformShell({
-          preheader: 'Confirm your new CRM login email.',
+          preheader: `Confirm your new ${PRODUCT_NAME} login email.`,
+          eyebrow: 'Account security',
           heading: 'Verify your new email address',
           bodyHtml,
         });
@@ -321,21 +363,23 @@ export class MailService {
       greeting(params.name),
       paragraph(
         orgName
-          ? `Here is the code to reset the password on your <strong>${esc(orgName)}</strong> CRM account.`
-          : 'Here is the code to reset your CRM password.',
+          ? `Here is the code to reset the password on your <strong>${esc(orgName)}</strong> account. Enter it on the reset screen to choose a new password.`
+          : `Here is the code to reset your ${PRODUCT_NAME} password. Enter it on the reset screen to choose a new password.`,
       ),
       otpPanel(params.otp),
-      note("Didn't request this? You can safely ignore this email — your password stays unchanged."),
+      note("Didn't request this? You can safely ignore this email — your password stays unchanged. Never share this code with anyone."),
     ].join('');
 
     const html = orgName
       ? organizationShell(orgName, {
-          preheader: `Your ${orgName} CRM reset code — valid for 10 minutes.`,
+          preheader: `Your ${orgName} reset code — valid for 10 minutes.`,
+          eyebrow: 'Password reset',
           heading: 'Your password reset code',
           bodyHtml,
         })
       : platformShell({
-          preheader: 'Your CRM reset code — valid for 10 minutes.',
+          preheader: `Your ${PRODUCT_NAME} reset code — valid for 10 minutes.`,
+          eyebrow: 'Password reset',
           heading: 'Your password reset code',
           bodyHtml,
         });
@@ -349,8 +393,38 @@ export class MailService {
   }
 
   /**
-   * Inbox sender name for organization mail, e.g. "Acme Realty via TDM Groups
-   * CRM". Built on SMTP_FROM_NAME so rebranding only needs that one env var.
+   * CRM update email (EmailNotificationService): one notification reads as
+   * itself; several that arrived together become one digest, so a burst of
+   * assignments is one email, not dozens.
+   */
+  async sendNotificationDigest(params: NotificationDigestParams): Promise<void> {
+    const [first] = params.items;
+    const single = params.items.length === 1 && params.moreCount === 0;
+    const total = params.items.length + params.moreCount;
+    const heading = single ? first.title : `You have ${total} new updates`;
+
+    const html = organizationShell(params.orgName, {
+      preheader: single ? first.message : `${first.title} and ${total - 1} more in ${params.orgName}.`,
+      eyebrow: single ? first.label : 'CRM updates',
+      heading,
+      bodyHtml: [
+        greeting(params.name),
+        single
+          ? paragraph(esc(first.message))
+          : paragraph(`Here's what happened in <strong>${esc(params.orgName)}</strong> since we last wrote.`),
+        single ? '' : updateList(params.items),
+        params.moreCount > 0 ? paragraph(`…and ${params.moreCount} more in the app.`) : '',
+        button(single ? 'Open in CRM' : 'See all notifications', single ? first.url : params.allUrl),
+        note(`You get these because email updates are on for your account. Turn them off any time on the Notifications page: <a href="${esc(params.allUrl)}" style="color: #0f766e;">${esc(params.allUrl)}</a>`),
+      ].join(''),
+    });
+
+    await this.send(params.to, single ? `${params.orgName} — ${first.title}` : `${params.orgName} — ${total} new updates`, html, this.orgFromName(params.orgName));
+  }
+
+  /**
+   * Inbox sender name for organization mail, e.g. "Acme Traders via TDM Groups
+   * ERP". Built on SMTP_FROM_NAME so rebranding only needs that one env var.
    */
   private orgFromName(orgName: string): string {
     return `${orgName} via ${this.defaultFromName}`;

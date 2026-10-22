@@ -1,10 +1,15 @@
 import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../../common/guards/roles.guard';
+import { Roles } from '../../../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { NotificationsService } from '../services/notifications.service';
 import { PushService } from '../services/push.service';
 import { PushSubscriptionDto, PushUnsubscribeDto } from '../dto/push-subscription.dto';
+import { EmailNotificationService } from '../services/email-notification.service';
+import { UpdateEmailNotificationSettingsDto, UpdateEmailPreferenceDto } from '../dto/email-preference.dto';
 
 @ApiTags('notifications')
 @ApiBearerAuth('access-token')
@@ -14,6 +19,7 @@ export class NotificationsController {
   constructor(
     private readonly notificationsService: NotificationsService,
     private readonly pushService: PushService,
+    private readonly emailNotifications: EmailNotificationService,
   ) {}
 
   @Get()
@@ -57,6 +63,18 @@ export class NotificationsController {
     return this.pushService.sendTest(actor);
   }
 
+  @Get('email-preference')
+  @ApiOperation({ summary: 'Whether CRM updates are emailed to the caller, and which kinds the org emails' })
+  getEmailPreference(@CurrentUser() actor: AuthenticatedUser) {
+    return this.emailNotifications.getMyPreference(actor);
+  }
+
+  @Patch('email-preference')
+  @ApiOperation({ summary: 'Turn CRM update emails on or off for the caller' })
+  setEmailPreference(@CurrentUser() actor: AuthenticatedUser, @Body() dto: UpdateEmailPreferenceDto) {
+    return this.emailNotifications.setMyPreference(actor, dto.enabled);
+  }
+
   @Patch(':id/read')
   @ApiOperation({ summary: 'Mark a single notification as read' })
   markRead(@CurrentUser() actor: AuthenticatedUser, @Param('id') id: string) {
@@ -67,5 +85,26 @@ export class NotificationsController {
   @ApiOperation({ summary: "Mark all of the caller's notifications as read" })
   markAllRead(@CurrentUser() actor: AuthenticatedUser) {
     return this.notificationsService.markAllRead(actor);
+  }
+}
+
+@ApiTags('settings')
+@ApiBearerAuth('access-token')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN)
+@Controller('settings')
+export class NotificationSettingsController {
+  constructor(private readonly emailNotifications: EmailNotificationService) {}
+
+  @Get('notifications')
+  @ApiOperation({ summary: 'Which notification types are emailed to users (Admin)' })
+  get(@CurrentUser() actor: AuthenticatedUser) {
+    return this.emailNotifications.getOrgSettings(actor);
+  }
+
+  @Patch('notifications')
+  @ApiOperation({ summary: 'Choose which notification types are emailed to users (Admin)' })
+  update(@CurrentUser() actor: AuthenticatedUser, @Body() dto: UpdateEmailNotificationSettingsDto) {
+    return this.emailNotifications.updateOrgSettings(actor, dto.emailNotificationTypes);
   }
 }

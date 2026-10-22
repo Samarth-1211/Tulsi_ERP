@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   ActivityType,
+  AllotmentStatus,
   FollowUpStatus,
   Lead,
   LeadSource,
@@ -389,6 +390,7 @@ export class LeadsService {
           },
         },
       });
+      await this.completeAllotments(tx, lead.id, to);
       return result;
     });
 
@@ -449,6 +451,7 @@ export class LeadsService {
           ...(lead.status === LeadStatus.ASSIGNED ? { status: LeadStatus.IN_PROGRESS } : {}),
         },
       });
+      await this.completeAllotments(tx, lead.id, dto.outcome?.trim() || null);
       await tx.leadActivityLog.create({
         data: {
           orgId: actor.orgId,
@@ -476,6 +479,14 @@ export class LeadsService {
         });
       }
       return followUp;
+    });
+  }
+
+  /** Working a lead closes its open Automated Task Allotment rows (see TaskAllotmentService). */
+  private completeAllotments(tx: Prisma.TransactionClient, leadId: string, outcome: string | null) {
+    return tx.taskAllotment.updateMany({
+      where: { leadId, status: AllotmentStatus.PENDING },
+      data: { status: AllotmentStatus.DONE, outcome, completedAt: new Date() },
     });
   }
 

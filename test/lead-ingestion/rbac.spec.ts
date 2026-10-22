@@ -72,6 +72,7 @@ function setup() {
     lead: { update: async ({ where, data }: Row) => Object.assign(leads.find((l) => l.id === where.id)!, data) },
     leadActivityLog: { create: async ({ data }: Row) => data },
     leadAssignment: { create: async ({ data }: Row) => data },
+    taskAllotment: { updateMany: async () => ({ count: 0 }) },
   };
   const prisma = {
     lead: {

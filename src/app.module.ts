@@ -20,6 +20,8 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MailModule } from './modules/mail/mail.module';
 import { VerificationModule } from './modules/verification/verification.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
+import { TaskAllotmentModule } from './modules/task-allotment/task-allotment.module';
+import { TripsModule } from './modules/trips/trips.module';
 
 @Module({
   imports: [
@@ -45,6 +47,8 @@ import { InventoryModule } from './modules/inventory/inventory.module';
     NotificationsModule,
     DashboardModule,
     InventoryModule,
+    TaskAllotmentModule,
+    TripsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AppThrottlerGuard }],

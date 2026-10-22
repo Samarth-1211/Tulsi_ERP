@@ -6,6 +6,7 @@ import * as webPush from 'web-push';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { PushSubscriptionDto } from '../dto/push-subscription.dto';
+import { notificationPath } from '../notification-url.util';
 
 /** Notifications older than this when dispatched are only marked, not pushed — a device alert that late is noise. */
 const STALE_AFTER_MS = 30 * 60 * 1000;
@@ -208,7 +209,7 @@ export class PushService implements OnModuleInit {
           this.send(sub, {
             title: n.title,
             body: n.message,
-            url: urlFor(n),
+            url: notificationPath(n),
             tag: n.id,
             notificationId: n.id,
             unreadCount: unreadByUser.get(n.userId) ?? 0,
@@ -239,17 +240,4 @@ export class PushService implements OnModuleInit {
       }
     }
   }
-}
-
-/** Where tapping the device notification takes the user — mirrors the in-app bell. */
-function urlFor(n: ClaimedNotification): string {
-  if (n.leadId) return `/leads/${n.leadId}`;
-  if (n.taskId) return '/todo';
-  const leadTypes: NotificationType[] = [
-    NotificationType.LEAD_CAPTURED,
-    NotificationType.LEAD_ASSIGNED,
-    NotificationType.LEAD_UPDATED,
-    NotificationType.LEAD_DELETED,
-  ];
-  return leadTypes.includes(n.type) ? '/leads' : '/dashboard';
 }
