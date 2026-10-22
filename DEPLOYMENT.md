@@ -72,7 +72,7 @@ flowchart LR
 
 **Server layout:** a single clone of this repo.
 ```
-/opt/tulsi-erp-backend/        ← git clone of https://github.com/Samarth-1211/Tulsi_ERP
+/opt/tulsi-erp/        ← git clone of https://github.com/Samarth-1211/Tulsi_ERP
 ├── docker-compose.yml  Dockerfile  deploy/Caddyfile  scripts/ …
 ├── .env                       ← production secrets, created on the server, git-ignored
 ├── backups/                   ← created by backup.sh, git-ignored
@@ -139,7 +139,7 @@ git push origin main
 ```
 `.env`, `uploads/`, `dist/`, `backups/` and `deploy-history.log` are git-ignored. `.env*` and `uploads/` are also excluded from the Docker image.
 
-> **CI note.** On push to `main`, the `deploy` job SSHes to the VPS and runs `bash scripts/deploy.sh` in `/opt/tulsi-erp-backend`. Until the repo secrets `VPS_HOST`, `VPS_USER` and `VPS_SSH_KEY` are set and the server is prepared (§5–6), that job **fails**. That's harmless, but expect a red ✗. Remove the `deploy:` job if you prefer manual deploys.
+> **CI note.** On push to `main`, the `deploy` job SSHes to the VPS and runs `bash scripts/deploy.sh` in `/opt/tulsi-erp`. Until the repo secrets `VPS_HOST`, `VPS_USER` and `VPS_SSH_KEY` are set and the server is prepared (§5–6), that job **fails**. That's harmless, but expect a red ✗. Remove the `deploy:` job if you prefer manual deploys.
 
 ---
 
@@ -233,7 +233,7 @@ If you use the **hPanel firewall** (VPS → Security → Firewall), allow the sa
 
 ### 5.5 Deployment directory and repository access
 ```bash
-mkdir -p /opt/tulsi-erp-backend && chown deploy:deploy /opt/tulsi-erp-backend
+mkdir -p /opt/tulsi-erp && chown deploy:deploy /opt/tulsi-erp
 ```
 From here on, **log in as `deploy`**.
 
@@ -260,7 +260,7 @@ All commands run on the VPS as `deploy`.
 
 ### 6.1 Clone
 ```bash
-cd /opt/tulsi-erp-backend
+cd /opt/tulsi-erp
 git clone https://github.com/Samarth-1211/Tulsi_ERP.git .
 # private repo (deploy key from §5.5):
 # git clone git@github-tulsi-backend:Samarth-1211/Tulsi_ERP.git .
@@ -430,12 +430,12 @@ This writes `backups/db-<timestamp>.dump` (pg_dump custom format, checked with `
 
 Daily at 02:30 (`crontab -e` as `deploy`):
 ```
-30 2 * * * cd /opt/tulsi-erp-backend && bash scripts/backup.sh >> backups/backup.log 2>&1
+30 2 * * * cd /opt/tulsi-erp && bash scripts/backup.sh >> backups/backup.log 2>&1
 ```
 **Copy backups off the server.** **(PowerShell)**:
 ```powershell
-scp "deploy@VPS_IP:/opt/tulsi-erp-backend/backups/db-*.dump" "D:\Backups\TulsiERP\"
-scp "deploy@VPS_IP:/opt/tulsi-erp-backend/backups/uploads-*.tar.gz" "D:\Backups\TulsiERP\"
+scp "deploy@VPS_IP:/opt/tulsi-erp/backups/db-*.dump" "D:\Backups\TulsiERP\"
+scp "deploy@VPS_IP:/opt/tulsi-erp/backups/uploads-*.tar.gz" "D:\Backups\TulsiERP\"
 ```
 Hostinger VPS snapshots (hPanel) are a useful extra layer, not a replacement.
 
@@ -452,8 +452,8 @@ The script validates the files, asks you to type `RESTORE`, and takes a safety b
 Normally production starts empty and only gets the Super Admin seed. To move your local database (`wholeseler_erp`), **(PowerShell)**:
 ```powershell
 pg_dump -h localhost -U <local_user> -d wholeseler_erp -Fc -f tulsi-local.dump
-ssh deploy@VPS_IP "mkdir -p /opt/tulsi-erp-backend/backups"
-scp tulsi-local.dump deploy@VPS_IP:/opt/tulsi-erp-backend/backups/
+ssh deploy@VPS_IP "mkdir -p /opt/tulsi-erp/backups"
+scp tulsi-local.dump deploy@VPS_IP:/opt/tulsi-erp/backups/
 ```
 Then on the VPS: `bash scripts/restore.sh backups/tulsi-local.dump`. If your local database still has demo accounts from an older seed (`demo.*@tulsi-erp.local`, `Demo@1234`), delete or disable them afterwards.
 
@@ -472,7 +472,7 @@ Volumes survive all three. `docker compose down` keeps volumes. **`docker compos
 
 ### 9.2 Standard update
 ```bash
-cd /opt/tulsi-erp-backend
+cd /opt/tulsi-erp
 bash scripts/deploy.sh
 ```
 This backs up, runs `git pull --ff-only` (refusing if the server checkout has local edits), re-runs itself if the script changed, rebuilds, recreates, applies migrations, waits for health and logs the revision. With the CI secrets set, every push to `main` that passes the tests does exactly this.
@@ -481,7 +481,7 @@ Then check: sign in on the frontend, open Leads, and review `docker compose logs
 
 ### 9.3 Rollback
 ```bash
-cd /opt/tulsi-erp-backend
+cd /opt/tulsi-erp
 tail -5 deploy-history.log            # last OK line → its backend=<rev>
 git checkout <rev>
 bash scripts/deploy.sh --no-pull
@@ -549,7 +549,7 @@ First look: `docker compose ps`, then `docker compose logs --tail=100 <service>`
 
 ## 12. Operational command reference
 
-Run from `/opt/tulsi-erp-backend` on the VPS.
+Run from `/opt/tulsi-erp` on the VPS.
 
 | Task | Command |
 |---|---|

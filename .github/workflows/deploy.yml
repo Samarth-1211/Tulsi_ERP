@@ -40,5 +40,5 @@ jobs:
           # waits for health; the backend container applies migrations on start.
           script: |
             set -e
-            cd /opt/tulsi-erp-backend
+            cd /opt/tulsi-erp
             bash scripts/deploy.sh
