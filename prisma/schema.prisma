@@ -41,6 +41,7 @@ enum LeadSource {
   REFERRAL
   CSV_IMPORT
   WEBSITE
+  GOOGLE_SHEET
   OTHER
 }
 
@@ -52,21 +53,11 @@ enum LeadStatus {
   LOST
 }
 
-enum CustomerType {
-  DEALER
-  RETAILER
-  CONTRACTOR
-  CARPENTER
-  BUILDER
-  INTERIOR_DESIGNER
-  HOMEOWNER
-  OTHER
-}
-
 enum IntegrationType {
   WHATSAPP
   META_LEAD_FORM
   WEBHOOK_GENERIC // common URL for n8n / Pabbly / Zapier / website forms
+  GOOGLE_SHEET // public Google Sheet polled for new rows (config.spreadsheetId + gid)
 }
 
 enum IntegrationStatus {
@@ -548,8 +539,9 @@ model Lead {
   city             String?
   pincode          String?
   address          String?
-  customerType     CustomerType?
   requirementNotes String? // e.g. "18mm BWP 8x4, 40 sheets" — structured requirements come in Phase 2
+  buyingFor        String? // "Buying For" — who the plywood is for (was also Customer type); Meta question आप_किसके_लिए_plywood_खरीदना_चाहते_हैं?_, kept as given
+  feedback         String? // "Feedback" (also a sheet's Remarks / Notes / Comments)
   estimatedValue   Decimal?      @db.Decimal(12, 2)
   source           LeadSource
   integrationId    String?
@@ -567,7 +559,7 @@ model Lead {
   rawPayload       Json?
   previousLeadId   String?
   deletedAt        DateTime?
-  createdAt        DateTime      @default(now())
+  createdAt        DateTime      @default(now()) // the lead's date: when it came in (a sheet's created_time / day heading when earlier)
   updatedAt        DateTime      @updatedAt
 
   // RCRM-kept: the Click-to-WhatsApp ad of the first message, and the Excel upload a lead came from.
@@ -602,6 +594,7 @@ model Lead {
   @@index([orgId, assignedToId])
   @@index([orgId, phone])
   @@index([orgId, createdAt])
+  @@index([orgId, buyingFor])
   @@index([adSourceId])
   @@index([importBatchId])
 }

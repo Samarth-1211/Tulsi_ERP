@@ -21,7 +21,6 @@ const SETTINGS_SELECT = {
   autoAllotBatchSize: true,
   autoAllotLookbackDays: true,
   autoAllotRestDays: true,
-  autoAllotMinValue: true,
   autoAllotIncludeLost: true,
   autoAllotEligibility: true,
   autoAllotPriority: true,
@@ -61,7 +60,7 @@ export class TaskAllotmentService {
       update: {},
       select: SETTINGS_SELECT,
     });
-    return this.presentSettings(row);
+    return row;
   }
 
   async updateSettings(actor: AuthenticatedUser, dto: UpdateTaskAllotmentSettingsDto) {
@@ -71,7 +70,7 @@ export class TaskAllotmentService {
       update: dto,
       select: SETTINGS_SELECT,
     });
-    return this.presentSettings(row);
+    return row;
   }
 
   // ─────────── The lead holder's own batch ───────────
@@ -110,8 +109,7 @@ export class TaskAllotmentService {
             phone: true,
             city: true,
             status: true,
-            customerType: true,
-            estimatedValue: true,
+            buyingFor: true,
             requirementNotes: true,
             createdAt: true,
             lastActivityAt: true,
@@ -127,11 +125,10 @@ export class TaskAllotmentService {
       dayDone,
       workLeft,
       batchSize: settings.autoAllotBatchSize,
-      items: items.map(({ lead: { followUps, _count, estimatedValue, ...lead }, ...item }) => ({
+      items: items.map(({ lead: { followUps, _count, ...lead }, ...item }) => ({
         ...item,
         lead: {
           ...lead,
-          estimatedValue: estimatedValue === null ? null : Number(estimatedValue),
           attempts: _count.followUps,
           lastFollowUp: followUps[0] ?? null,
         },
@@ -270,7 +267,7 @@ export class TaskAllotmentService {
    * The user's own leads that qualify for a batch: came in within the
    * look-back window, already contacted and still in the pipeline (or LOST,
    * when included), quiet for at least autoAllotRestDays, with no callback
-   * scheduled, worth at least autoAllotMinValue when set, and — for
+   * scheduled, and — for
    * NOT_CONNECTED — whose last follow-up was a NO_ANSWER.
    */
   private async findCandidates(tx: Tx, actor: AuthenticatedUser, settings: AllotmentSettings): Promise<AllotmentCandidate[]> {
@@ -285,7 +282,6 @@ export class TaskAllotmentService {
         assignedToId: actor.userId,
         status: { in: statuses },
         createdAt: { gte: new Date(now - settings.autoAllotLookbackDays * DAY_MS) },
-        ...(settings.autoAllotMinValue !== null ? { estimatedValue: { gte: settings.autoAllotMinValue } } : {}),
         AND: [
           { OR: [{ firstResponseAt: { not: null } }, { followUps: { some: {} } }] },
           { OR: [{ lastActivityAt: null }, { lastActivityAt: { lte: quietSince } }] },
@@ -296,7 +292,6 @@ export class TaskAllotmentService {
         id: true,
         createdAt: true,
         lastActivityAt: true,
-        estimatedValue: true,
         followUps: LAST_FOLLOW_UP,
         _count: { select: { followUps: true } },
       },
@@ -310,7 +305,6 @@ export class TaskAllotmentService {
         id: l.id,
         createdAt: l.createdAt,
         lastContactAt: l.lastActivityAt,
-        value: l.estimatedValue === null ? null : Number(l.estimatedValue),
         attempts: l._count.followUps,
       }));
   }
@@ -324,16 +318,11 @@ export class TaskAllotmentService {
         autoAllotBatchSize: 15,
         autoAllotLookbackDays: 30,
         autoAllotRestDays: 2,
-        autoAllotMinValue: null,
         autoAllotIncludeLost: false,
         autoAllotEligibility: AllotmentEligibility.NOT_CONNECTED,
         autoAllotPriority: AllotmentPriority.SMART,
         autoAllotThenBy: AllotmentPriority.LONGEST_SILENT,
       }
     );
-  }
-
-  private presentSettings<T extends { autoAllotMinValue: Prisma.Decimal | null }>(row: T) {
-    return { ...row, autoAllotMinValue: row.autoAllotMinValue === null ? null : Number(row.autoAllotMinValue) };
   }
 }

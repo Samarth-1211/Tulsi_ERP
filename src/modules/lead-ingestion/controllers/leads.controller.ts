@@ -293,6 +293,16 @@ export class LeadsController {
     return this.leadsService.countUnseen(actor);
   }
 
+  // Declared before `GET :id` so it isn't captured as a lead id.
+  @Get('filter-options')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...LEAD_ROLES)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Values in use for the Buying For and Requirement filters with lead counts; ad ids for an Admin' })
+  filterOptions(@CurrentUser() actor: AuthenticatedUser) {
+    return this.leadsService.filterOptions(actor);
+  }
+
   // Declared before `GET :id` so "cities" isn't captured as a lead id.
   @Get('cities')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -318,7 +328,9 @@ export class LeadsController {
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'List leads (Admin: org; Manager: own + team; Caller: own)',
-    description: 'Filters: status, source, customerType, assignedToId, city, from/to (created), search (name/phone); page/pageSize.',
+    description:
+      'Filters: status, source, assignedToId, city, buyingFor, requirement, hasFeedback, from/to (lead date), ' +
+      'search (name/phone), adId (Admin); sort newest | oldest | ad (Admin); page/pageSize.',
   })
   findAll(@CurrentUser() actor: AuthenticatedUser, @Query() query: LeadQueryDto) {
     return this.leadsService.findAll(actor, query);

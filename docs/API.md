@@ -217,7 +217,8 @@ Check-out response: the attendance row with `status: "CHECKED_OUT"`, `checkOutAt
 | Method | Endpoint | Roles | Description |
 |---|---|---|---|
 | `POST` | `/leads` | ADMIN, MANAGER, CALLER | Manual entry through the ingestion service |
-| `GET` | `/leads` | ADMIN, MANAGER, CALLER | Filtered, paginated list |
+| `GET` | `/leads` | ADMIN, MANAGER, CALLER | Filtered, paginated list — `status, source, assignedToId, city, buyingFor, requirement, hasFeedback (true/false)`, `from/to` (the lead's date: when it came in), `search`; ADMIN also `adId` (or `none`) and `sort=ad`; `sort=newest\|oldest`. Non-admins never receive `attribution.adId` |
+| `GET` | `/leads/filter-options` | ADMIN, MANAGER, CALLER | `{ buyingFor, requirement }` values in use with lead counts; ADMIN also `ads: [{ value, name, count }]` |
 | `GET` | `/leads/:id` | ADMIN, MANAGER, CALLER | One lead |
 | `PATCH` | `/leads/:id` | ADMIN, MANAGER, CALLER | Edit fields |
 | `PATCH` | `/leads/:id/status` | ADMIN, MANAGER, CALLER | Status change |
@@ -385,6 +386,8 @@ Round robin: active, non-deleted users of `allocationTargetRole` (`MANAGER` or `
 
 City locations: every 20 s `CityGeocodingService` takes a few `PENDING` cities (English-script names first) and (1) merges a city that sounds like one already located in the org (`phoneticKey`: "Devas" ≈ "Dewas" ≈ "देवास"), else (2) searches Nominatim for towns/villages in the org's state, then (3) sound-alike spelling variants (v↔w, ee↔i, doubled letters…). Matches more than 400 km from the org's base (the median of its located cities, or its own city) are ignored. A corrected spelling renames the city — or merges it into the existing one — keeps the typed spelling in `aliases`, and renames its leads; OSM's alternate names don't rename ("Mhow" stays Mhow). Three misses → `NOT_FOUND` for an Admin to place. Routing falls back to a straight line (`routeSource: "straight"`) when OSRM is unreachable. Base URLs: `NOMINATIM_URL`, `PHOTON_URL`, `OSRM_URL` (public OSM servers by default — fine for an office's use; host your own for heavy traffic).
 
+> **No money in the API.** `estimatedValue` (leads), `price` / `costPrice` (products) and `autoAllotMinValue` (task allotment) stay in the database but are stripped from every response (`MoneyFieldsInterceptor`) and rejected in request bodies. Money columns in lead sheets / uploads (Value, Amount, Price, Budget…) are not kept.
+
 ## 10. Lead sources and webhooks
 
 Every source calls `LeadIngestionService.ingest()` (DB doc §5): phone normalized to E.164 (default +91; invalid → rejected), open lead with the same phone → `RE_ENQUIRY`, else create lead + attribution + `CREATED` activity, then allocate (explicit → `MANUAL`, Caller/Manager creator → `SELF`, else round robin) and notify.
@@ -396,7 +399,9 @@ Every source calls `LeadIngestionService.ingest()` (DB doc §5): phone normalize
 | `POST` | `/platform-integrations` | Create; returns `webhookUrl`, `samplePayload` (and `metaWebhook` for Meta) |
 | `GET` | `/platform-integrations`, `/platform-integrations/:id` | List / one |
 | `POST` | `/platform-integrations/:id/reveal-secret` | Re-show URL, sample payload, verify token |
-| `PATCH` | `/platform-integrations/:id` | Update name, status, page id, page token, form ids, field mapping |
+| `GET` | `/platform-integrations/google-sheet-setup` | `{ serviceAccountEmail }` — who to share private sheets with (`null` = only public-link sheets) |
+| `POST` | `/platform-integrations/:id/sync` | `GOOGLE_SHEET` only: read the sheet now → `{ rows, newRows, created, reEnquiries, failed }` |
+| `PATCH` | `/platform-integrations/:id` | Update name, status, page id, page token, form ids, field mapping, sheet link |
 | `DELETE` | `/platform-integrations/:id` | Set `INACTIVE` |
 
 ```json
@@ -420,7 +425,9 @@ POST /platform-integrations
 }
 ```
 
-`type`: `META_LEAD_FORM` or `WEBHOOK_GENERIC`. The page token is encrypted at rest and never returned.
+`type`: `META_LEAD_FORM`, `WEBHOOK_GENERIC` or `GOOGLE_SHEET`. The page token is encrypted at rest and never returned.
+
+**Google Sheet sources** (`type: GOOGLE_SHEET`, required `sheetUrl`; `#gid=` picks the tab). With `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `_PRIVATE_KEY` set, the sheet is read through the Sheets API as that service account (share it with that email as Viewer — it can stay private); if the account may not open it, or none is configured, the public CSV export is used ("Anyone with the link can view"). The server reads the tab every 2 minutes (and right after create/update), reads it with the Excel-import header names (Name, Phone / Mobile No., Email, City, …) and ingests every row not seen before with source `GOOGLE_SHEET` (columns that aren't a lead field go to `customFields` under their header) — so all existing rows on connect, then new ones. Each row is a `WebhookEvent` keyed on its mobile number (+ a Timestamp / created_time column if present): editing or re-sorting the sheet doesn't re-import, a bad row is retried once fixed. More than 20 new rows in one read are ingested without per-lead notifications. A read failure (not shared, not found, no headers) sets `status: ERROR` and `config.lastSyncError`; the next good read clears it. `config` also carries `lastSyncedAt` and `rowCount`. The sheet link is a credential: Managers get `config` without `sheetUrl`/`spreadsheetId`.
 
 ### 10.2 Common lead URL — `POST /webhooks/leads/:webhookToken` (public)
 

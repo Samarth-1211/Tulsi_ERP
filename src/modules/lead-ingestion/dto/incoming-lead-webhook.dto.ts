@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CustomerType } from '@prisma/client';
-import { IsEmail, IsEnum, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 /**
  * The payload accepted at POST /webhooks/leads/:webhookToken — sent by
@@ -24,15 +23,20 @@ export class IncomingLeadWebhookDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() city?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() pincode?: string;
 
-  @ApiProperty({ required: false, enum: CustomerType })
+  @ApiProperty({ required: false, deprecated: true, description: 'Older name of buyingFor — saved as Buying For' })
   @IsOptional()
-  @IsEnum(CustomerType)
-  customerType?: CustomerType;
+  @IsString()
+  customerType?: string;
 
   @ApiProperty({ required: false, example: '18mm BWP 8x4, 50 sheets' })
   @IsOptional()
   @IsString()
   requirement?: string;
+
+  @ApiProperty({ required: false, example: 'Dealer / retailer', description: 'Who the plywood is for ("Buying For")' })
+  @IsOptional()
+  @IsString()
+  buyingFor?: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsString() campaign_id?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() campaign_name?: string;
@@ -61,7 +65,7 @@ export const SAMPLE_LEAD_WEBHOOK_PAYLOAD = {
   email: 'sharma@example.com',
   city: 'Indore',
   pincode: '452001',
-  customerType: 'DEALER',
+  buyingFor: 'Dealer / retailer',
   requirement: '18mm BWP 8x4, 50 sheets',
   campaign_id: '120200000000001',
   campaign_name: 'Plywood Leads Oct',

@@ -1,16 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Integration, IntegrationStatus, IntegrationType, Prisma, Role } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EncryptionService } from '../../../common/crypto/encryption.service';
 import { SAMPLE_LEAD_WEBHOOK_PAYLOAD } from '../../lead-ingestion/dto/incoming-lead-webhook.dto';
+import { GoogleSheetSyncService } from '../../lead-ingestion/services/google-sheet-sync.service';
+import { GoogleSheetsApiService } from '../../lead-ingestion/services/google-sheets-api.service';
+import { GoogleSheetConfig, parseGoogleSheetUrl } from '../../lead-ingestion/utils/google-sheet.util';
 import { CreatePlatformIntegrationDto, LEAD_INTEGRATION_TYPES } from '../dto/create-platform-integration.dto';
 import { UpdatePlatformIntegrationDto } from '../dto/update-platform-integration.dto';
 
 const token = () => randomBytes(24).toString('hex');
 
-interface IntegrationConfig {
+interface IntegrationConfig extends Partial<GoogleSheetConfig> {
   formIds?: string[];
   fieldMapping?: Record<string, string>;
 }
@@ -26,6 +29,8 @@ export class PlatformIntegrationService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly encryption: EncryptionService,
+    private readonly sheetSync: GoogleSheetSyncService,
+    private readonly sheetsApi: GoogleSheetsApiService,
   ) {}
 
   private baseUrl(): string {
@@ -44,6 +49,12 @@ export class PlatformIntegrationService {
   private toResponse(integration: Integration, includeCredentials: boolean) {
     const { encryptedSecrets, webhookToken, verifyToken, ...rest } = integration;
     const base = { ...rest, hasPageAccessToken: !!encryptedSecrets };
+    if (integration.type === IntegrationType.GOOGLE_SHEET) {
+      // A public sheet's link opens every lead in it — a credential like the webhook URL.
+      if (includeCredentials) return base;
+      const { sheetUrl, spreadsheetId, ...config } = (integration.config ?? {}) as IntegrationConfig;
+      return { ...base, config };
+    }
     if (!includeCredentials) return base;
 
     return {
@@ -66,8 +77,19 @@ export class PlatformIntegrationService {
     return this.encryption.encrypt(JSON.stringify({ pageAccessToken }));
   }
 
+  /** The sheet link → config; the link is required for a GOOGLE_SHEET source. */
+  private sheetConfig(sheetUrl: string | undefined): Pick<GoogleSheetConfig, 'sheetUrl' | 'spreadsheetId' | 'gid'> {
+    const parsed = sheetUrl ? parseGoogleSheetUrl(sheetUrl) : null;
+    if (!parsed) {
+      throw new BadRequestException('Paste the Google Sheet’s link, e.g. https://docs.google.com/spreadsheets/d/…/edit#gid=0');
+    }
+    return { sheetUrl: sheetUrl!.trim(), ...parsed };
+  }
+
   async create(orgId: string, dto: CreatePlatformIntegrationDto) {
+    const isSheet = dto.type === IntegrationType.GOOGLE_SHEET;
     const config: IntegrationConfig = {
+      ...(isSheet ? this.sheetConfig(dto.sheetUrl) : {}),
       ...(dto.formIds ? { formIds: dto.formIds } : {}),
       ...(dto.fieldMapping ? { fieldMapping: dto.fieldMapping } : {}),
     };
@@ -84,6 +106,8 @@ export class PlatformIntegrationService {
         encryptedSecrets: dto.pageAccessToken ? this.encryptSecrets(dto.pageAccessToken) : null,
       },
     });
+    // Every row already in the sheet is imported now; new ones on each sync after.
+    if (isSheet) this.sheetSync.syncInBackground(integration.id);
     return this.toResponse(integration, true);
   }
 
@@ -109,6 +133,7 @@ export class PlatformIntegrationService {
     const current = (existing.config ?? {}) as IntegrationConfig;
     const config: IntegrationConfig = {
       ...current,
+      ...(existing.type === IntegrationType.GOOGLE_SHEET && dto.sheetUrl !== undefined ? this.sheetConfig(dto.sheetUrl) : {}),
       ...(dto.formIds !== undefined ? { formIds: dto.formIds } : {}),
       ...(dto.fieldMapping !== undefined ? { fieldMapping: dto.fieldMapping } : {}),
     };
@@ -125,7 +150,19 @@ export class PlatformIntegrationService {
           : {}),
       },
     });
+    // A new link or a re-activation is read straight away rather than at the next sync.
+    if (updated.type === IntegrationType.GOOGLE_SHEET) this.sheetSync.syncInBackground(updated.id);
     return this.toResponse(updated, true);
+  }
+
+  /** Who a private sheet must be shared with; null when the server has no Google service account. */
+  googleSheetSetup() {
+    return { serviceAccountEmail: this.sheetsApi.serviceAccountEmail };
+  }
+
+  /** Reads a Google Sheet source now instead of waiting for the next sync. */
+  syncSheet(id: string, orgId: string) {
+    return this.sheetSync.syncNow(id, orgId);
   }
 
   /** Soft action — INACTIVE stops the webhook; past leads keep referencing the integration. */

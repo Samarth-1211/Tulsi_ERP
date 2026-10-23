@@ -44,6 +44,9 @@ const IMPORT_BATCH_SUMMARY = {
   select: { id: true, fileName: true, createdAt: true, uploadedBy: { select: { id: true, name: true, role: true } } },
 } satisfies Prisma.LeadImportBatchDefaultArgs;
 
+// Most common Requirement values offered in its filter.
+const MAX_REQUIREMENT_OPTIONS = 30;
+
 const LIST_INCLUDE = {
   assignedTo: ASSIGNEE_SUMMARY,
   attribution: { select: { campaignName: true, adName: true, adId: true, formName: true, ctwaClid: true } },
@@ -101,9 +104,11 @@ export class LeadsService {
       city: dto.city,
       pincode: dto.pincode,
       address: dto.address,
-      customerType: dto.customerType,
       requirementNotes: dto.requirementNotes,
-      estimatedValue: dto.estimatedValue,
+      buyingFor: dto.buyingFor,
+      feedback: dto.feedback,
+      enquiredAt: dto.date ? businessDayStartInstant(dto.date) : undefined,
+      attribution: actor.role === Role.ADMIN && dto.adId?.trim() ? { adId: dto.adId.trim() } : undefined,
       createdById: actor.userId,
       assignToId: dto.assignToId,
       channel: `manual entry by ${actor.email}`,
@@ -122,15 +127,26 @@ export class LeadsService {
     const search = query.search?.trim();
     const searchPhone = search?.replace(/[^\d+]/g, '');
 
+    // Each its own condition: several use OR, which can't share one object.
+    const conditions: Prisma.LeadWhereInput[] = [];
+    if (query.hasFeedback === 'true') conditions.push({ feedback: { not: null } }, { NOT: { feedback: '' } });
+    if (query.hasFeedback === 'false') conditions.push({ OR: [{ feedback: null }, { feedback: '' }] });
+    // Ads are an Admin's view: others' ad filter / sort are ignored.
+    const isAdmin = actor.role === Role.ADMIN;
+    if (isAdmin && query.adId === 'none') conditions.push({ OR: [{ attribution: null }, { attribution: { adId: null } }] });
+    else if (isAdmin && query.adId) conditions.push({ attribution: { adId: query.adId } });
+
     const where: Prisma.LeadWhereInput = {
       AND: [
         this.scope(actor),
+        ...conditions,
         {
           ...(query.status ? { status: query.status } : {}),
           ...(query.source ? { source: query.source } : {}),
-          ...(query.customerType ? { customerType: query.customerType } : {}),
           ...(query.assignedToId ? { assignedToId: query.assignedToId } : {}),
           ...(query.city ? { city: { equals: query.city.trim(), mode: 'insensitive' as const } } : {}),
+          ...(query.buyingFor ? { buyingFor: query.buyingFor } : {}),
+          ...(query.requirement ? { requirementNotes: query.requirement } : {}),
           ...(query.from || query.to
             ? {
                 createdAt: {
@@ -158,13 +174,18 @@ export class LeadsService {
       this.prisma.lead.findMany({
         where,
         include: LIST_INCLUDE,
-        orderBy: { createdAt: 'desc' },
+        orderBy:
+          query.sort === 'oldest'
+            ? { createdAt: 'asc' as const }
+            : query.sort === 'ad' && isAdmin
+              ? [{ attribution: { adId: 'asc' as const } }, { createdAt: 'desc' as const }]
+              : { createdAt: 'desc' as const },
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
       this.prisma.lead.count({ where }),
     ]);
-    return { items, total, page, pageSize };
+    return { items: items.map((lead) => this.withoutAdIdUnlessAdmin(lead, actor)), total, page, pageSize };
   }
 
   /**
@@ -181,6 +202,47 @@ export class LeadsService {
         ...(actor.role === Role.ADMIN ? { createdAt: { gt: user.leadsSeenAt } } : { assignedAt: { gt: user.leadsSeenAt } }),
       },
     });
+  }
+
+  /**
+   * Values in use for the Buying For / Requirement filters (most common first,
+   * within what the caller can see) and, for an Admin, every ad id leads came from.
+   */
+  async filterOptions(actor: AuthenticatedUser) {
+    const scope = this.scope(actor);
+    const [buyingFor, requirement, ads] = await Promise.all([
+      this.prisma.lead.groupBy({ by: ['buyingFor'], where: { ...scope, buyingFor: { not: null } }, _count: { _all: true }, orderBy: { _count: { buyingFor: 'desc' } } }),
+      // Requirement is free text too: only the values several leads share make useful options.
+      this.prisma.lead.groupBy({
+        by: ['requirementNotes'],
+        where: { ...scope, requirementNotes: { not: null } },
+        _count: { _all: true },
+        orderBy: { _count: { requirementNotes: 'desc' } },
+        take: MAX_REQUIREMENT_OPTIONS,
+      }),
+      actor.role === Role.ADMIN
+        ? this.prisma.leadAdAttribution.groupBy({ by: ['adId', 'adName'], where: { adId: { not: null }, lead: scope }, _count: { _all: true } })
+        : Promise.resolve([]),
+    ]);
+    const byAd = new Map<string, { value: string; name: string | null; count: number }>();
+    for (const g of ads) {
+      const ad = byAd.get(g.adId!) ?? { value: g.adId!, name: null, count: 0 };
+      ad.count += g._count._all;
+      ad.name ??= g.adName;
+      byAd.set(g.adId!, ad);
+    }
+    return {
+      buyingFor: buyingFor.map((g) => ({ value: g.buyingFor!, count: g._count._all })),
+      requirement: requirement.filter((g) => g._count._all > 1).map((g) => ({ value: g.requirementNotes!, count: g._count._all })),
+      ...(actor.role === Role.ADMIN ? { ads: [...byAd.values()].sort((a, b) => b.count - a.count) } : {}),
+    };
+  }
+
+  /** The Meta ad id is an Admin's tracking detail. */
+  private withoutAdIdUnlessAdmin<T extends { attribution?: { adId?: string | null } | null }>(lead: T, actor: AuthenticatedUser): T {
+    if (actor.role === Role.ADMIN || !lead.attribution) return lead;
+    const { adId: _adId, ...attribution } = lead.attribution;
+    return { ...lead, attribution };
   }
 
   /** Every city the org's leads have come from, A–Z — options for the Leads "City" filter. */
@@ -210,7 +272,7 @@ export class LeadsService {
       },
     });
     if (!lead) throw new NotFoundException('Lead not found');
-    return lead;
+    return this.withoutAdIdUnlessAdmin(lead, actor);
   }
 
   /** GET /leads/:id/activities — the lead's timeline, newest first. */
@@ -284,9 +346,9 @@ export class LeadsService {
       city: dto.city?.trim(),
       pincode: dto.pincode,
       address: dto.address,
-      customerType: dto.customerType,
       requirementNotes: dto.requirementNotes,
-      estimatedValue: dto.estimatedValue,
+      buyingFor: dto.buyingFor,
+      feedback: dto.feedback,
     };
 
     const show = (v: unknown) => (v === null || v === undefined || v === '' ? '—' : String(v));
@@ -298,15 +360,23 @@ export class LeadsService {
       city: 'City',
       pincode: 'Pincode',
       address: 'Address',
-      customerType: 'Customer type',
       requirementNotes: 'Requirement',
-      estimatedValue: 'Estimated value',
+      buyingFor: 'Buying For',
+      feedback: 'Feedback',
     };
     const changes: LeadFieldChange[] = [];
     for (const key of Object.keys(next) as (keyof typeof next)[]) {
       const to = next[key];
-      const from = key === 'estimatedValue' ? lead.estimatedValue?.toNumber() : lead[key];
+      const from = lead[key];
       if (to !== undefined && show(from) !== show(to)) changes.push({ label: labels[key], from: show(from), to: show(to) });
+    }
+    // Admin only, and not on the timeline / notifications other roles see.
+    const adId = actor.role === Role.ADMIN && dto.adId !== undefined ? dto.adId.trim() || null : undefined;
+    if (adId !== undefined) {
+      const current = await this.prisma.leadAdAttribution.findUnique({ where: { leadId: lead.id }, select: { adId: true } });
+      if ((current?.adId ?? null) !== adId) {
+        await this.prisma.leadAdAttribution.upsert({ where: { leadId: lead.id }, create: { leadId: lead.id, adId }, update: { adId } });
+      }
     }
     if (changes.length === 0) return this.findOne(actor, lead.id);
 
@@ -662,7 +732,7 @@ export class LeadsService {
 
     const leads = await this.prisma.lead.findMany({
       where: { orgId: actor.orgId, deletedAt: null, assignedToId: { in: executives.map((e) => e.id) } },
-      select: { assignedToId: true, status: true, estimatedValue: true, nextFollowUpAt: true },
+      select: { assignedToId: true, status: true, nextFollowUpAt: true },
     });
     const byExecutive = new Map<string, typeof leads>();
     for (const lead of leads) byExecutive.set(lead.assignedToId!, [...(byExecutive.get(lead.assignedToId!) ?? []), lead]);
@@ -680,7 +750,6 @@ export class LeadsService {
         openLeads: list.filter((l) => OPEN_LEAD_STATUSES.includes(l.status)).length,
         converted: converted.length,
         lost: list.filter((l) => l.status === LeadStatus.LOST).length,
-        convertedValue: converted.reduce((sum, l) => sum + Number(l.estimatedValue ?? 0), 0),
         overdueFollowUps: list.filter(
           (l) => l.nextFollowUpAt && l.nextFollowUpAt.getTime() < now && OPEN_LEAD_STATUSES.includes(l.status),
         ).length,

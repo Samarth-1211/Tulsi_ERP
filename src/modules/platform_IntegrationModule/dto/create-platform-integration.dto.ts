@@ -3,7 +3,7 @@ import { IntegrationType } from '@prisma/client';
 import { IsArray, IsIn, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 /** Lead-source integrations managed here; WhatsApp has its own module (/whatsapp/integration). */
-export const LEAD_INTEGRATION_TYPES = [IntegrationType.META_LEAD_FORM, IntegrationType.WEBHOOK_GENERIC] as const;
+export const LEAD_INTEGRATION_TYPES = [IntegrationType.META_LEAD_FORM, IntegrationType.WEBHOOK_GENERIC, IntegrationType.GOOGLE_SHEET] as const;
 
 export class CreatePlatformIntegrationDto {
   @ApiProperty({ enum: LEAD_INTEGRATION_TYPES })
@@ -14,6 +14,15 @@ export class CreatePlatformIntegrationDto {
   @IsString()
   @IsNotEmpty()
   name!: string;
+
+  @ApiProperty({
+    required: false,
+    example: 'https://docs.google.com/spreadsheets/d/1AbC…/edit#gid=0',
+    description: 'GOOGLE_SHEET only (required there): the link of a sheet shared as "Anyone with the link can view". The #gid picks the tab.',
+  })
+  @IsOptional()
+  @IsString()
+  sheetUrl?: string;
 
   @ApiProperty({ required: false, description: 'Meta page_id — routes native leadgen webhooks to this integration' })
   @IsOptional()
@@ -35,7 +44,7 @@ export class CreatePlatformIntegrationDto {
     required: false,
     example: { full_name: 'name', phone_number: 'phone', which_product_do_you_need: 'requirementNotes' },
     description:
-      'Meta form question key → lead field (name, phone, email, city, pincode, customerType, requirementNotes). ' +
+      'Meta form question key → lead field (name, phone, email, city, pincode, buyingFor, requirementNotes, feedback). ' +
       'Unmapped answers go to customFields.',
   })
   @IsOptional()

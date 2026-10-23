@@ -10,7 +10,6 @@ const lead = (id: string, o: Partial<AllotmentCandidate> = {}): AllotmentCandida
   id,
   createdAt: daysAgo(10),
   lastContactAt: daysAgo(5),
-  value: null,
   attempts: 1,
   ...o,
 });
@@ -20,9 +19,10 @@ const rank = (rows: AllotmentCandidate[], p: AllotmentPriority, then: AllotmentP
   ids(rankCandidates(rows, p, then, limit, NOW));
 
 describe('Automated Task Allotment ranking', () => {
-  it('HIGHEST_VALUE puts the biggest deal first and leads without a value last', () => {
-    const rows = [lead('none'), lead('small', { value: 500 }), lead('big', { value: 25000 })];
-    assert.deepEqual(rank(rows, AllotmentPriority.HIGHEST_VALUE), ['big', 'small', 'none']);
+  it('HIGHEST_VALUE (retired with lead value) ranks like SMART', () => {
+    const rows = [lead('recent', { lastContactAt: daysAgo(2), attempts: 3 }), lead('quiet', { lastContactAt: daysAgo(15) })];
+    assert.deepEqual(rank(rows, AllotmentPriority.HIGHEST_VALUE), rank(rows, AllotmentPriority.SMART));
+    assert.deepEqual(rank(rows, AllotmentPriority.SMART), ['quiet', 'recent']);
   });
 
   it('LONGEST_SILENT puts the lead contacted longest ago first', () => {
@@ -42,23 +42,23 @@ describe('Automated Task Allotment ranking', () => {
     assert.deepEqual(rank(rows, AllotmentPriority.MOST_ENGAGED), ['many', 'one']);
   });
 
-  it('SMART favours a valuable, long-quiet lead over a cheap, recently tried one', () => {
+  it('SMART favours a long-quiet, little-tried lead over a recently, often tried one', () => {
     const rows = [
-      lead('cheap-recent', { value: 500, lastContactAt: daysAgo(2), attempts: 4 }),
-      lead('valuable-quiet', { value: 20000, lastContactAt: daysAgo(18), attempts: 1 }),
-      lead('mid', { value: 8000, lastContactAt: daysAgo(8), attempts: 2 }),
+      lead('recent-often', { lastContactAt: daysAgo(2), attempts: 4 }),
+      lead('quiet-once', { lastContactAt: daysAgo(18), attempts: 1 }),
+      lead('mid', { lastContactAt: daysAgo(8), attempts: 2 }),
     ];
-    assert.deepEqual(rank(rows, AllotmentPriority.SMART), ['valuable-quiet', 'mid', 'cheap-recent']);
+    assert.deepEqual(rank(rows, AllotmentPriority.SMART), ['quiet-once', 'mid', 'recent-often']);
   });
 
   it('the tie-breaker decides between equal leads, then id keeps it stable', () => {
-    const rows = [lead('b', { value: 500, createdAt: daysAgo(3) }), lead('a', { value: 500, createdAt: daysAgo(20) }), lead('c', { value: 500, createdAt: daysAgo(20) })];
-    assert.deepEqual(rank(rows, AllotmentPriority.HIGHEST_VALUE, AllotmentPriority.NEWEST_ENQUIRY), ['b', 'a', 'c']);
+    const rows = [lead('b', { createdAt: daysAgo(3) }), lead('a', { createdAt: daysAgo(20) }), lead('c', { createdAt: daysAgo(20) })];
+    assert.deepEqual(rank(rows, AllotmentPriority.FEWEST_ATTEMPTS, AllotmentPriority.NEWEST_ENQUIRY), ['b', 'a', 'c']);
   });
 
   it('keeps only the batch size', () => {
-    const rows = Array.from({ length: 40 }, (_, i) => lead(`l${String(i).padStart(2, '0')}`, { value: i * 100 }));
-    const top = rank(rows, AllotmentPriority.HIGHEST_VALUE, AllotmentPriority.OLDEST_ENQUIRY, 15);
+    const rows = Array.from({ length: 40 }, (_, i) => lead(`l${String(i).padStart(2, '0')}`, { attempts: 40 - i }));
+    const top = rank(rows, AllotmentPriority.FEWEST_ATTEMPTS, AllotmentPriority.OLDEST_ENQUIRY, 15);
     assert.equal(top.length, 15);
     assert.equal(top[0], 'l39');
   });

@@ -1,7 +1,7 @@
 import { ApiProperty, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
-import { MAX_MONEY, MAX_QUANTITY } from '../../../common/utils/limits.util';
+import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import { MAX_QUANTITY } from '../../../common/utils/limits.util';
 
 export const PRODUCT_CATEGORIES = ['PLYWOOD', 'LAMINATE', 'BLOCKBOARD', 'MDF', 'HDHMR', 'VENEER', 'DOOR', 'HARDWARE', 'OTHER'] as const;
 export const PRODUCT_UNITS = ['SHEET', 'PIECE', 'BOX', 'SQFT', 'KG'] as const;
@@ -35,21 +35,7 @@ export class CreateProductDto {
   @IsIn(PRODUCT_UNITS)
   unit?: string;
 
-  @ApiProperty({ required: false, example: 3650, description: 'Selling price per unit (₹)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MAX_MONEY)
-  price?: number;
 
-  @ApiProperty({ required: false, example: 3100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MAX_MONEY)
-  costPrice?: number;
 
   @ApiProperty({ required: false, example: 120, description: 'Opening stock' })
   @IsOptional()

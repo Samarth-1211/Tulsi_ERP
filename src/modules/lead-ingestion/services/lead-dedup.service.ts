@@ -49,6 +49,8 @@ export interface ReEnquiry {
   performedById?: string | null;
   /** What the repeat enquiry carried, kept on the timeline entry. */
   details?: Record<string, unknown>;
+  /** False inside a bulk import, which sends one summary instead of a notification per lead. */
+  notify?: boolean;
 }
 
 /**
@@ -95,7 +97,7 @@ export class LeadDedupService {
 
     const updated = await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: now } });
 
-    if (lead.assignedToId && lead.assignedToId !== enquiry.performedById) {
+    if (enquiry.notify !== false && lead.assignedToId && lead.assignedToId !== enquiry.performedById) {
       await tx.notification.create({
         data: {
           orgId: lead.orgId,

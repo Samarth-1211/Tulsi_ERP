@@ -5,27 +5,24 @@ export interface AllotmentCandidate {
   id: string;
   createdAt: Date;
   lastContactAt: Date | null;
-  value: number | null;
   attempts: number; // follow-ups logged so far
 }
 
-// SMART weights: a valuable lead matters most, then one that has gone quiet
-// longest, then one that has had the fewest tries.
-const SMART_WEIGHTS = { value: 0.5, silence: 0.3, freshness: 0.2 };
+// SMART weights: the lead that has gone quiet longest matters most, then the
+// one that has had the fewest tries. (Lead value no longer counts — the CRM keeps no money.)
+const SMART_WEIGHTS = { silence: 0.6, freshness: 0.4 };
 
 /**
- * SMART score in [0, 1] per candidate. Value and silence are scaled against
- * the best in this set, so the score only compares leads with each other.
+ * SMART score in [0, 1] per candidate. Silence is scaled against the longest
+ * in this set, so the score only compares leads with each other.
  */
 export function smartScores(candidates: AllotmentCandidate[], now = new Date()): Map<string, number> {
   const silenceOf = (c: AllotmentCandidate) => now.getTime() - (c.lastContactAt ?? c.createdAt).getTime();
-  const maxValue = Math.max(0, ...candidates.map((c) => c.value ?? 0));
   const maxSilence = Math.max(0, ...candidates.map(silenceOf));
   return new Map(
     candidates.map((c) => [
       c.id,
-      SMART_WEIGHTS.value * (maxValue > 0 ? (c.value ?? 0) / maxValue : 0) +
-        SMART_WEIGHTS.silence * (maxSilence > 0 ? silenceOf(c) / maxSilence : 0) +
+      SMART_WEIGHTS.silence * (maxSilence > 0 ? silenceOf(c) / maxSilence : 0) +
         SMART_WEIGHTS.freshness / (1 + c.attempts),
     ]),
   );
@@ -35,9 +32,6 @@ type Compare = (a: AllotmentCandidate, b: AllotmentCandidate) => number;
 
 function comparator(priority: AllotmentPriority, scores: Map<string, number>): Compare {
   switch (priority) {
-    case AllotmentPriority.HIGHEST_VALUE:
-      // Leads without a value go last.
-      return (a, b) => (b.value ?? -1) - (a.value ?? -1);
     case AllotmentPriority.LONGEST_SILENT:
       return (a, b) => (a.lastContactAt?.getTime() ?? 0) - (b.lastContactAt?.getTime() ?? 0);
     case AllotmentPriority.NEWEST_ENQUIRY:
@@ -48,6 +42,7 @@ function comparator(priority: AllotmentPriority, scores: Map<string, number>): C
       return (a, b) => a.attempts - b.attempts;
     case AllotmentPriority.MOST_ENGAGED:
       return (a, b) => b.attempts - a.attempts;
+    // HIGHEST_VALUE is retired with lead value; an org still set to it gets SMART.
     case AllotmentPriority.SMART:
     default:
       return (a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0);

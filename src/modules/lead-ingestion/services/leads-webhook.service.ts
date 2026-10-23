@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import {
-  CustomerType,
   Integration,
   IntegrationStatus,
   IntegrationType,
@@ -17,9 +16,12 @@ import { EncryptionService } from '../../../common/crypto/encryption.service';
 import { isValidWebhookSignature } from '../../whatsapp-integration/utils/whatsapp-signature.util';
 import { IncomingLeadWebhookDto } from '../dto/incoming-lead-webhook.dto';
 import { IngestAttribution, IngestInput, LeadIngestionService } from './lead-ingestion.service';
+import { BUYING_FOR_QUESTION_KEY, REQUIREMENT_QTY_QUESTION_KEY } from '../utils/lead-import.util';
 
 /** Lead fields a Meta form answer can be mapped to via Integration.config.fieldMapping. */
-const MAPPABLE_FIELDS = ['name', 'phone', 'email', 'city', 'pincode', 'customerType', 'requirementNotes'] as const;
+const MAPPABLE_FIELDS = ['name', 'phone', 'email', 'city', 'pincode', 'buyingFor', 'requirementNotes', 'feedback'] as const;
+/** Mapping targets of fields that were merged — older fieldMapping configs still work. */
+const MERGED_TARGETS: Record<string, MappableField> = { customerType: 'buyingFor', requirementQty: 'requirementNotes', remarks: 'feedback' };
 type MappableField = (typeof MAPPABLE_FIELDS)[number];
 
 /** Used when an integration has no fieldMapping for a Meta field — Meta's standard question keys. */
@@ -34,6 +36,8 @@ const DEFAULT_META_FIELD_MAPPING: Record<string, MappableField> = {
   post_code: 'pincode',
   postal_code: 'pincode',
   pincode: 'pincode',
+  [BUYING_FOR_QUESTION_KEY]: 'buyingFor',
+  [REQUIREMENT_QTY_QUESTION_KEY]: 'requirementNotes',
 };
 
 const GRAPH_LEAD_FIELDS =
@@ -104,7 +108,8 @@ export class LeadsWebhookService implements OnApplicationBootstrap {
   /** Re-queues anything that was stored but never processed (e.g. the server restarted mid-queue). */
   async onApplicationBootstrap(): Promise<void> {
     const pending = await this.prisma.webhookEvent.findMany({
-      where: { status: WebhookEventStatus.RECEIVED, source: { not: IntegrationType.WHATSAPP } },
+      // Google Sheet rows left RECEIVED are retried by GoogleSheetSyncService on its next read.
+      where: { status: WebhookEventStatus.RECEIVED, source: { notIn: [IntegrationType.WHATSAPP, IntegrationType.GOOGLE_SHEET] } },
       select: { id: true },
       orderBy: { receivedAt: 'asc' },
     });
@@ -149,6 +154,11 @@ export class LeadsWebhookService implements OnApplicationBootstrap {
 
   private relayToIngest(integration: Integration, body: Record<string, unknown>): IngestInput {
     const dto = plainToInstance(IncomingLeadWebhookDto, body);
+    const extra = dto.extra ?? {};
+    const { [BUYING_FOR_QUESTION_KEY]: _buyingFor, [REQUIREMENT_QTY_QUESTION_KEY]: _requirementQty, ...otherExtra } = extra;
+    const answer = (key: string) => (typeof extra[key] === 'string' ? (extra[key] as string) : undefined);
+    // Requirement and "Approx. Requirement" are one field now: both, joined, when both are sent.
+    const requirement = [dto.requirement, answer(REQUIREMENT_QTY_QUESTION_KEY)].filter(Boolean).join(' · ') || undefined;
     const attribution: IngestAttribution = this.compact({
       campaignId: dto.campaign_id,
       campaignName: dto.campaign_name,
@@ -172,9 +182,11 @@ export class LeadsWebhookService implements OnApplicationBootstrap {
       email: dto.email,
       city: dto.city,
       pincode: dto.pincode,
-      customerType: dto.customerType,
-      requirementNotes: dto.requirement,
-      customFields: dto.extra,
+      requirementNotes: requirement,
+      // The Meta questions may also arrive among the relayed extra answers (n8n / Zapier);
+      // customerType is the older name of Buying For.
+      buyingFor: dto.buyingFor ?? answer(BUYING_FOR_QUESTION_KEY) ?? dto.customerType,
+      customFields: Object.keys(otherExtra).length ? otherExtra : undefined,
       attribution: Object.keys(attribution).length ? { ...attribution, raw: body as Prisma.InputJsonValue } : undefined,
       rawPayload: body,
       channel: integration.name,
@@ -263,14 +275,10 @@ export class LeadsWebhookService implements OnApplicationBootstrap {
 
     for (const field of lead.field_data ?? []) {
       const answer = (field.values ?? []).join(', ').trim();
-      const target = mapping[field.name] as MappableField | undefined;
+      const target = (MERGED_TARGETS[mapping[field.name]] ?? mapping[field.name]) as MappableField | undefined;
       if (target && (MAPPABLE_FIELDS as readonly string[]).includes(target) && !mapped[target]) mapped[target] = answer;
       else customFields[field.name] = answer;
     }
-
-    const customerType = mapped.customerType?.toUpperCase().replace(/[\s-]+/g, '_');
-    const validCustomerType = customerType && customerType in CustomerType ? (customerType as CustomerType) : undefined;
-    if (mapped.customerType && !validCustomerType) customFields.customerType = mapped.customerType;
 
     return {
       orgId: integration.orgId,
@@ -282,8 +290,9 @@ export class LeadsWebhookService implements OnApplicationBootstrap {
       email: mapped.email,
       city: mapped.city,
       pincode: mapped.pincode,
-      customerType: validCustomerType,
+      buyingFor: mapped.buyingFor,
       requirementNotes: mapped.requirementNotes,
+      feedback: mapped.feedback,
       customFields: Object.keys(customFields).length ? customFields : undefined,
       attribution: {
         ...this.compact({

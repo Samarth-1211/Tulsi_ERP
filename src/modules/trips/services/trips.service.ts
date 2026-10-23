@@ -22,17 +22,16 @@ function statusesFor(filter: TripLeadFilter = TripLeadFilter.OPEN, includeLost =
   return includeLost ? [...base, LeadStatus.LOST] : base;
 }
 
-/** Leads of one city for the trip filter: open, already customers, lost (when included), follow-ups due today, open value. */
+/** Leads of one city for the trip filter: open, already customers, lost (when included), follow-ups due today. */
 export interface CityLeadStats {
   total: number;
   open: number;
   converted: number;
   lost: number;
   due: number;
-  value: number;
 }
 
-const emptyStats = (): CityLeadStats => ({ total: 0, open: 0, converted: 0, lost: 0, due: 0, value: 0 });
+const emptyStats = (): CityLeadStats => ({ total: 0, open: 0, converted: 0, lost: 0, due: 0 });
 // Detour suggestions: lead cities up to this far off the road (beyond it, it's a different trip).
 const MAX_DETOUR_OFF_KM = 120;
 const round = (n: number, digits = 0) => Math.round(n * 10 ** digits) / 10 ** digits;
@@ -46,8 +45,7 @@ const TRIP_LEAD_SELECT = {
   address: true,
   pincode: true,
   status: true,
-  customerType: true,
-  estimatedValue: true,
+  buyingFor: true,
   requirementNotes: true,
   nextFollowUpAt: true,
   lastActivityAt: true,
@@ -140,8 +138,8 @@ export class TripsService {
 
     const totals = along.reduce((t, { c }) => {
       const s = stats.get(c.id)!;
-      return { ...t, cities: t.cities + 1, leads: t.leads + s.total, due: t.due + s.due, value: t.value + s.value };
-    }, { cities: 0, leads: 0, due: 0, value: 0 });
+      return { ...t, cities: t.cities + 1, leads: t.leads + s.total, due: t.due + s.due };
+    }, { cities: 0, leads: 0, due: 0 });
 
     return {
       route: {
@@ -407,7 +405,6 @@ export class TripsService {
         by: ['city', 'status'],
         where: { ...base, status: { in: statusesFor(filter, includeLost) } },
         _count: { _all: true },
-        _sum: { estimatedValue: true },
       }),
       this.prisma.lead.groupBy({
         by: ['city'],
@@ -433,10 +430,7 @@ export class TripsService {
       s.total += n;
       if (row.status === LeadStatus.CONVERTED) s.converted += n;
       else if (row.status === LeadStatus.LOST) s.lost += n;
-      else {
-        s.open += n;
-        s.value += Number(row._sum.estimatedValue ?? 0);
-      }
+      else s.open += n;
     }
     for (const row of due) {
       const s = statsFor(row.city);
@@ -460,7 +454,7 @@ export class TripsService {
         AND: [leadVisibilityWhere(scope), { OR: names.map((n) => ({ city: { equals: n, mode: 'insensitive' as const } })) }],
       },
       select: TRIP_LEAD_SELECT,
-      orderBy: [{ estimatedValue: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+      orderBy: { createdAt: 'desc' },
       take: MAX_TRIP_LEADS,
     });
 
@@ -468,9 +462,7 @@ export class TripsService {
       const keys = new Set([c.key, ...c.aliases]);
       return {
         city: { id: c.id, name: c.name, lat: c.lat, lng: c.lng },
-        leads: leads
-          .filter((l) => l.city && keys.has(l.city.trim().toLowerCase()))
-          .map((l) => ({ ...l, estimatedValue: l.estimatedValue === null ? null : Number(l.estimatedValue) })),
+        leads: leads.filter((l) => l.city && keys.has(l.city.trim().toLowerCase())),
       };
     });
   }

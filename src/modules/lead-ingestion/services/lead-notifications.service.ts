@@ -24,6 +24,17 @@ export interface BulkAllocationRow {
   count: number;
 }
 
+/** A Google Sheet sync that brought in many rows at once: who got which leads. */
+export interface BulkSheetSyncSummary {
+  orgId: string;
+  /** The integration's name, e.g. "Meta leads sheet". */
+  sheetName: string;
+  /** Each new lead's assignee (null = not assigned yet). */
+  created: (string | null)[];
+  /** The assignee of each existing lead that enquired again. */
+  reEnquired: (string | null)[];
+}
+
 export interface BulkUploadSummary {
   orgId: string;
   uploader: { id: string; name: string; role: Role };
@@ -336,6 +347,110 @@ export class LeadNotificationsService {
       select: { id: true },
     });
     return users.map((u) => u.id);
+  }
+
+  /**
+   * One summary per person for a Google Sheet sync that brought in many rows
+   * (instead of one notification per lead), scoped like every lead
+   * notification: each assignee hears how many new leads they got and how
+   * many of theirs enquired again; each Manager how many went to their team
+   * members; the Admins the whole picture. Nobody hears about leads they can't see.
+   */
+  async notifyBulkSheetSync({ orgId, sheetName, created, reEnquired }: BulkSheetSyncSummary): Promise<void> {
+    if (created.length === 0 && reEnquired.length === 0) return;
+    const via = `From the Google Sheet "${sheetName}"`;
+    const tally = (ids: (string | null)[]) => {
+      const byUser = new Map<string, number>();
+      for (const id of ids) if (id) byUser.set(id, (byUser.get(id) ?? 0) + 1);
+      return byUser;
+    };
+    const newBy = tally(created);
+    const againBy = tally(reEnquired);
+    const unassigned = created.filter((id) => !id).length;
+
+    try {
+      const people = await this.prisma.user.findMany({
+        where: { id: { in: [...new Set([...newBy.keys(), ...againBy.keys()])] } },
+        select: { id: true, name: true, managerId: true, status: true, deletedAt: true },
+      });
+      const active = (u: { status: UserStatus; deletedAt: Date | null }) => u.status === UserStatus.ACTIVE && !u.deletedAt;
+      const leadsWord = (n: number) => (n === 1 ? 'lead' : 'leads');
+      const data: { orgId: string; userId: string; type: NotificationType; title: string; message: string }[] = [];
+
+      // Each assignee: their own leads only.
+      for (const person of people.filter(active)) {
+        const fresh = newBy.get(person.id) ?? 0;
+        const again = againBy.get(person.id) ?? 0;
+        const againText = again === 1 ? 'one of your leads enquired again' : `${again} of your leads enquired again`;
+        data.push(
+          fresh > 0
+            ? {
+                orgId,
+                userId: person.id,
+                type: NotificationType.LEAD_ASSIGNED,
+                title: `${plural(fresh, 'new lead')} assigned to you`,
+                message: `${via}${again > 0 ? ` — and ${againText}` : ''}.`,
+              }
+            : {
+                orgId,
+                userId: person.id,
+                type: NotificationType.GENERIC,
+                title: againText[0].toUpperCase() + againText.slice(1),
+                message: `${via} — matched by phone number, so no duplicates were created.`,
+              },
+        );
+      }
+
+      // Each Manager: the new leads their team members got (their own share was covered above).
+      const teams = new Map<string, { name: string; count: number }[]>();
+      for (const person of people) {
+        const fresh = newBy.get(person.id) ?? 0;
+        if (!person.managerId || person.managerId === person.id || fresh === 0) continue;
+        teams.set(person.managerId, [...(teams.get(person.managerId) ?? []), { name: person.name, count: fresh }]);
+      }
+      const managers = await this.prisma.user.findMany({
+        where: { id: { in: [...teams.keys()] }, role: Role.MANAGER, status: UserStatus.ACTIVE, deletedAt: null },
+        select: { id: true },
+      });
+      for (const { id } of managers) {
+        const rows = teams.get(id)!;
+        data.push({
+          orgId,
+          userId: id,
+          type: NotificationType.LEAD_CAPTURED,
+          title: `${plural(rows.reduce((sum, r) => sum + r.count, 0), 'new lead')} went to your team`,
+          message: truncate(`${via} — ${rows.map((r) => `${r.name}: ${r.count}`).join(', ')}.`),
+        });
+      }
+
+      // Admins: everything.
+      const admins = await this.prisma.user.findMany({
+        where: { orgId, role: Role.ADMIN, status: UserStatus.ACTIVE, deletedAt: null },
+        select: { id: true },
+      });
+      const nameOf = new Map(people.map((p) => [p.id, p.name]));
+      const split = [...newBy].sort((a, b) => b[1] - a[1]).map(([id, n]) => `${nameOf.get(id) ?? 'someone'} ${n}`);
+      const parts = [
+        split.length ? `assigned — ${split.join(', ')}` : '',
+        unassigned ? `${unassigned} not assigned yet, needs allocation` : '',
+        reEnquired.length ? `${reEnquired.length} existing ${leadsWord(reEnquired.length)} enquired again` : '',
+      ].filter(Boolean);
+      for (const { id } of admins) {
+        data.push({
+          orgId,
+          userId: id,
+          type: NotificationType.LEAD_CAPTURED,
+          title: created.length
+            ? `${unassigned ? 'Action needed — ' : ''}${plural(created.length, 'new lead')} from Google Sheet "${sheetName}"`
+            : `${reEnquired.length} existing ${leadsWord(reEnquired.length)} enquired again via Google Sheet "${sheetName}"`,
+          message: truncate(`${parts.join('; ')}.`),
+        });
+      }
+
+      if (data.length) await this.prisma.notification.createMany({ data });
+    } catch (error) {
+      this.logger.warn(`Could not send Google Sheet sync notifications for "${sheetName}": ${error}`);
+    }
   }
 
   /**

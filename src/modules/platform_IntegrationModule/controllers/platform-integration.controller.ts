@@ -40,6 +40,14 @@ export class PlatformIntegrationController {
     return this.platformIntegrationService.create(user.orgId, dto);
   }
 
+  // Google Sheet setup: the CRM's service-account email to share private sheets
+  // with (null = only "Anyone with the link" sheets can be read). Declared before
+  // GET :id so it isn't taken for an id.
+  @Get('google-sheet-setup')
+  googleSheetSetup() {
+    return this.platformIntegrationService.googleSheetSetup();
+  }
+
   // List view — secret withheld here. This is for monitoring status
   // (isActive, lastReceivedAt), not credential retrieval. Managers can
   // view integrations for visibility into where their leads come from,
@@ -69,6 +77,12 @@ export class PlatformIntegrationController {
       id,
       user.orgId,
     );
+  }
+
+  // Google Sheet sources only: read the sheet now instead of at the next sync (every 2 min).
+  @Post(':id/sync')
+  sync(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.platformIntegrationService.syncSheet(id, user.orgId);
   }
 
   @Patch(':id')

@@ -3,7 +3,6 @@ import {
   ActivityType,
   AllocationMode,
   AssignmentMethod,
-  CustomerType,
   Lead,
   LeadSource,
   LeadStatus,
@@ -17,13 +16,24 @@ import { LeadAllocationService } from './lead-allocation.service';
 import { LeadDedupService, formatSourceLabel, toE164 } from './lead-dedup.service';
 import { LeadNotificationsService } from './lead-notifications.service';
 import { rememberCity } from '../utils/city.util';
-import { MAX_MONEY } from '../../../common/utils/limits.util';
+import { businessDayStartInstant } from '../../../common/utils/business-date.util';
 import { LEAD_ASSIGNEE_ROLES } from '../../../common/utils/lead-scope.util';
 
 /** Ad attribution fields (LeadAdAttribution minus its own keys). */
 export type IngestAttribution = Partial<
   Omit<Prisma.LeadAdAttributionUncheckedCreateInput, 'id' | 'leadId' | 'createdAt'>
 >;
+
+const WHATSAPP_SOURCES = new Set<LeadSource>([LeadSource.WHATSAPP_CTWA, LeadSource.WHATSAPP_ORGANIC]);
+
+/**
+ * A lead's date is when it came in: a date a sheet / upload gives for an
+ * earlier day backdates it; anything from today keeps the real arrival time
+ * (so it still counts as new today). Undefined = now.
+ */
+function leadDate(enquiredAt: Date | undefined, now: Date): Date | undefined {
+  return enquiredAt && enquiredAt < businessDayStartInstant(now) ? enquiredAt : undefined;
+}
 
 /** §5 of docs/PHASE1_DATABASE.md — the one input every lead source sends. */
 export interface IngestInput {
@@ -38,9 +48,12 @@ export interface IngestInput {
   city?: string;
   pincode?: string;
   address?: string;
-  customerType?: CustomerType;
+  /** "Buying For": who the plywood is for, as the customer answered. */
+  buyingFor?: string;
   requirementNotes?: string;
-  estimatedValue?: number;
+  feedback?: string;
+  /** When the lead came in, if a sheet / upload says so — becomes the lead's date (createdAt) when before today. */
+  enquiredAt?: Date;
   customFields?: Record<string, unknown>;
   attribution?: IngestAttribution;
   rawPayload?: unknown;
@@ -56,7 +69,7 @@ export interface IngestInput {
 export interface IngestOptions {
   /** The stored raw webhook this enquiry came from — marked PROCESSED / DUPLICATE / FAILED. */
   webhookEventId?: string;
-  /** Skip per-lead notifications (bulk import sends one summary instead). */
+  /** Skip per-lead notifications — new lead and re-enquiry alike (bulk import sends one summary instead). */
   silent?: boolean;
   /** Never fall back to SELF / round robin — no assignToId means unassigned (bulk import). */
   noAutoAssign?: boolean;
@@ -122,15 +135,22 @@ export class LeadIngestionService {
             source: input.source,
             channel,
             performedById: input.createdById ?? null,
+            notify: !options.silent,
             details: {
               integrationId: input.integrationId ?? null,
               sourceLeadId: input.sourceLeadId ?? null,
               name: input.name ?? null,
               requirementNotes: input.requirementNotes ?? null,
+              buyingFor: input.buyingFor ?? null,
               ...(input.attribution ? { attribution: input.attribution } : {}),
               ...(input.customFields ? { customFields: input.customFields } : {}),
             },
           });
+          // The ad behind the enquiry, when the lead has none yet (WhatsApp keeps RCRM's behaviour).
+          if (input.attribution?.adId && !WHATSAPP_SOURCES.has(input.source)) {
+            const known = await tx.leadAdAttribution.findUnique({ where: { leadId: open.id }, select: { id: true } });
+            if (!known) await tx.leadAdAttribution.create({ data: { ...input.attribution, leadId: open.id } });
+          }
           return { lead, outcome: 'RE_ENQUIRY', assignment: null };
         }
 
@@ -149,10 +169,10 @@ export class LeadIngestionService {
             city: input.city?.trim() || null,
             pincode: input.pincode?.trim() || null,
             address: input.address?.trim() || null,
-            // Sheets/webhooks can carry absurd amounts; drop what the column can't hold.
-            estimatedValue: input.estimatedValue != null && input.estimatedValue <= MAX_MONEY ? input.estimatedValue : undefined,
-            customerType: input.customerType,
             requirementNotes: input.requirementNotes?.trim() || null,
+            buyingFor: input.buyingFor?.trim() || null,
+            feedback: input.feedback?.trim() || null,
+            createdAt: leadDate(input.enquiredAt, now),
             customFields: (input.customFields ?? undefined) as Prisma.InputJsonValue | undefined,
             rawPayload: (input.rawPayload ?? undefined) as Prisma.InputJsonValue | undefined,
             createdById: input.createdById,

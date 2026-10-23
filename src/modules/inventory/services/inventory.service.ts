@@ -21,8 +21,6 @@ const COLUMNS = [
   { key: 'thickness', header: 'Thickness', aliases: ['thick'], example: '18mm' },
   { key: 'size', header: 'Size', aliases: ['dimension', 'dimensions'], example: '8x4 ft' },
   { key: 'unit', header: 'Unit', aliases: ['uom'], example: 'SHEET' },
-  { key: 'price', header: 'Price (₹)', aliases: ['price', 'rate', 'selling price', 'mrp'], example: 3650 },
-  { key: 'costPrice', header: 'Cost Price (₹)', aliases: ['cost', 'cost price', 'purchase price'], example: 3100 },
   { key: 'stock', header: 'Stock', aliases: ['qty', 'quantity', 'opening stock', 'stock qty'], example: 120 },
   { key: 'reorderLevel', header: 'Reorder Level', aliases: ['reorder', 'min stock', 'minimum stock'], example: 20 },
   { key: 'description', header: 'Description', aliases: ['notes', 'remarks'], example: 'Boiling water proof, 25-year warranty' },
@@ -70,25 +68,21 @@ export class InventoryService {
   async summary(actor: AuthenticatedUser) {
     const products = await this.prisma.product.findMany({
       where: { orgId: actor.orgId, deletedAt: null },
-      select: { category: true, stock: true, reorderLevel: true, price: true, isActive: true },
+      select: { category: true, stock: true, reorderLevel: true, isActive: true },
     });
-    const byCategory: Record<string, { products: number; units: number; value: number }> = {};
+    const byCategory: Record<string, { products: number; units: number }> = {};
     let units = 0;
-    let value = 0;
     let lowStock = 0;
     let outOfStock = 0;
     for (const p of products) {
-      const v = Number(p.price) * p.stock;
       units += p.stock;
-      value += v;
       if (p.stock === 0) outOfStock++;
       else if (p.stock <= p.reorderLevel) lowStock++;
-      const c = (byCategory[p.category] ??= { products: 0, units: 0, value: 0 });
+      const c = (byCategory[p.category] ??= { products: 0, units: 0 });
       c.products++;
       c.units += p.stock;
-      c.value += v;
     }
-    return { totalProducts: products.length, totalUnits: units, stockValue: Math.round(value), lowStock, outOfStock, byCategory };
+    return { totalProducts: products.length, totalUnits: units, lowStock, outOfStock, byCategory };
   }
 
   async get(actor: AuthenticatedUser, id: string) {
@@ -171,7 +165,7 @@ export class InventoryService {
     help.addRow({});
     help.addRow({ header: 'Category', example: PRODUCT_CATEGORIES.join(', ') });
     help.addRow({ header: 'Unit', example: PRODUCT_UNITS.join(', ') });
-    help.addRow({ header: 'Note', example: 'Only "Product Name" is required. A row whose SKU already exists updates that product (price, details and stock).' });
+    help.addRow({ header: 'Note', example: 'Only "Product Name" is required. A row whose SKU already exists updates that product (details and stock).' });
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
@@ -215,8 +209,6 @@ export class InventoryService {
         thickness: this.text(values.thickness) || null,
         size: this.text(values.size) || null,
         description: this.text(values.description) || null,
-        price: this.num(values.price, row, 'Price', issues) ?? 0,
-        costPrice: this.num(values.costPrice, row, 'Cost Price', issues),
         reorderLevel: Math.round(this.num(values.reorderLevel, row, 'Reorder Level', issues, MAX_QUANTITY) ?? 0),
       };
       const stock = Math.max(0, Math.round(this.num(values.stock, row, 'Stock', issues, MAX_QUANTITY) ?? 0));

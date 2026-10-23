@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { validateEnv } from './common/config/env.validation';
+import { MoneyFieldsInterceptor } from './common/interceptors/money-fields.interceptor';
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
 import { HealthController } from './health/health.controller';
 import { PrismaModule } from './prisma/prisma.module';
@@ -51,6 +52,10 @@ import { TripsModule } from './modules/trips/trips.module';
     TripsModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: AppThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: AppThrottlerGuard },
+    // No money in any response (lead value, product prices) — see the interceptor.
+    { provide: APP_INTERCEPTOR, useClass: MoneyFieldsInterceptor },
+  ],
 })
 export class AppModule {}

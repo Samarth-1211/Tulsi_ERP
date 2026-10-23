@@ -188,7 +188,7 @@ const isPrivilegedViewer: boolean = ([Role.SUPER_ADMIN, Role.ADMIN] as Role[]).i
             phone: true,
             email: true,
             city: true,
-            customerType: true,
+            buyingFor: true,
             source: true,
             status: true,
             nextFollowUpAt: true,

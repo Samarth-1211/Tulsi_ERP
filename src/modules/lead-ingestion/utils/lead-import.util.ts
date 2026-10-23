@@ -1,4 +1,3 @@
-import { CustomerType } from '@prisma/client';
 import type { CellValue } from 'exceljs';
 
 /**
@@ -23,10 +22,11 @@ export type ImportField =
   | 'city'
   | 'pincode'
   | 'address'
-  | 'customerType'
+  | 'buyingFor'
   | 'requirementNotes'
-  | 'estimatedValue'
-  | 'remarks';
+  | 'feedback'
+  | 'enquiredAt'
+  | 'adId';
 
 export interface ImportColumn {
   field: ImportField;
@@ -39,6 +39,11 @@ export interface ImportColumn {
   hint: string;
   example: string | number;
 }
+
+/** The Meta lead form question saved as Lead.buyingFor ("Buying For") — its key in Meta and in Meta's sheet exports. */
+export const BUYING_FOR_QUESTION_KEY = 'आप_किसके_लिए_plywood_खरीदना_चाहते_हैं?_';
+/** The Meta lead form question saved in Lead.requirementNotes ("Requirement"). */
+export const REQUIREMENT_QTY_QUESTION_KEY = '_आपकी_approx._requirement_कितनी_है?';
 
 export const IMPORT_COLUMNS: ImportColumn[] = [
   {
@@ -63,39 +68,57 @@ export const IMPORT_COLUMNS: ImportColumn[] = [
   { field: 'pincode', header: 'Pincode', aliases: ['Pin Code', 'PIN', 'Zip', 'Postal Code'], hint: 'Optional.', example: '452001' },
   { field: 'address', header: 'Address', aliases: ['Full Address', 'Shop Address'], hint: 'Optional.', example: 'Siyaganj, Indore' },
   {
-    field: 'customerType',
-    header: 'Customer Type',
-    aliases: ['Type', 'Category', 'Customer Category'],
-    hint: 'Optional: Dealer, Retailer, Contractor, Carpenter, Builder, Interior Designer, Homeowner or Other.',
-    example: 'Dealer',
+    field: 'buyingFor',
+    header: 'Buying For',
+    aliases: [BUYING_FOR_QUESTION_KEY, 'Customer Type', 'Type', 'Category', 'Customer Category', 'Buying for whom', 'Purchase for', 'Purchase purpose'],
+    hint: 'Optional. Who the plywood is for — own home, dealer / retailer, contractor / carpenter, architect / interior designer… Kept as written.',
+    example: 'Dealer / retailer',
   },
   {
     field: 'requirementNotes',
     header: 'Requirement',
-    aliases: ['Requirements', 'Requirement Notes', 'Product', 'Products', 'Interest', 'Enquiry'],
-    hint: 'Optional, e.g. product, thickness, size and quantity.',
+    aliases: [
+      'Requirements', 'Requirement Notes', 'Product', 'Products', 'Interest', 'Enquiry',
+      REQUIREMENT_QTY_QUESTION_KEY, 'Approx. Requirement', 'Approx Requirement', 'Requirement Quantity', 'Quantity', 'Qty',
+    ],
+    hint: 'Optional, e.g. product, thickness, size and quantity ("18mm BWP 8x4, 50 sheets" or "10–30 sheets").',
     example: '18mm BWP 8x4, 50 sheets',
   },
   {
-    field: 'estimatedValue',
-    header: 'Estimated Value (₹)',
-    aliases: ['Estimated Value', 'Value', 'Order Value', 'Amount'],
-    hint: 'Optional amount, e.g. 85000 or "85k".',
-    example: 85000,
+    field: 'feedback',
+    header: 'Feedback',
+    aliases: ['Remarks', 'Notes', 'Note', 'Comments', 'Comment', 'Message', 'Caller Feedback', 'Customer Feedback'],
+    hint: 'Optional.',
+    example: 'Call after 5 pm',
   },
   {
-    field: 'remarks',
-    header: 'Remarks',
-    aliases: ['Notes', 'Note', 'Comments', 'Comment', 'Message'],
-    hint: 'Optional. Kept on the lead as a custom field.',
-    example: 'Wants delivery next week',
+    field: 'enquiredAt',
+    header: 'Date',
+    aliases: ['Lead Date', 'Enquiry Date', 'created_time', 'Created Time', 'Timestamp', 'Submitted At'],
+    hint: 'Optional: when the lead came in, e.g. 16/09/2026 or 16/09/2026 10:30 — empty means the upload date. A row holding only a date is read as the date of the rows under it.',
+    example: '16/09/2026',
+  },
+  {
+    field: 'adId',
+    header: 'Ad ID',
+    aliases: ['ad_id', 'Meta Ad ID'],
+    hint: 'Optional. The Meta ad the lead came from (seen by Admins only).',
+    example: '120249746455520716',
   },
 ];
 
-/** "Mobile No." / "mobile_no" / "MOBILE NO" -> "mobileno" — how headers and enum values are compared. */
+/**
+ * "Mobile No." / "mobile_no" / "MOBILE NO" -> "mobileno" — how headers and enum values are compared.
+ * Letters of any script are kept, so a Hindi header isn't reduced to its English words.
+ */
 function squash(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return value.toLowerCase().replace(/[^\p{L}\p{M}\p{N}]/gu, '');
 }
+
+// Money columns of a sheet / upload — read past, not saved (the CRM keeps no money).
+const MONEY_HEADERS = new Set(
+  ['Estimated Value', 'Estimated Value (₹)', 'Value', 'Order Value', 'Deal Value', 'Amount', 'Price', 'Rate', 'MRP', 'Cost', 'Budget'].map(squash),
+);
 
 const FIELD_BY_HEADER = new Map<string, ImportField>();
 for (const column of IMPORT_COLUMNS) {
@@ -125,6 +148,7 @@ export function mapHeaderRow(cells: Map<number, string>): HeaderMapping | null {
 
   for (const [col, text] of cells) {
     if (!text) continue;
+    if (MONEY_HEADERS.has(squash(text))) continue; // no money is kept — not even as an extra detail
     headers.set(col, text);
     const field = FIELD_BY_HEADER.get(squash(text));
     if (field && !taken.has(field)) {
@@ -174,7 +198,8 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function parsePhone(value: CellInput): string | undefined {
   // Excel stores long numbers as floats, e.g. 919876543210.
-  const text = typeof value === 'number' ? String(Math.round(value)) : cellText(value);
+  // Meta's lead exports (and its Google Sheets sync) write numbers as "p:+919812345678".
+  const text = typeof value === 'number' ? String(Math.round(value)) : cellText(value).replace(/^\s*p:/i, '');
   const compact = text.replace(/[\s\-().]/g, '');
   return PHONE_PATTERN.test(compact) ? compact : undefined;
 }
@@ -310,21 +335,70 @@ export function parseAmount(value: CellInput): number | undefined {
 }
 
 
-function enumParser<T extends string>(values: readonly T[], aliases: Record<string, T> = {}) {
-  const lookup = new Map<string, T>(values.map((v) => [squash(v), v]));
-  for (const [alias, v] of Object.entries(aliases)) lookup.set(squash(alias), v);
-  return (value: CellInput): T | undefined => lookup.get(squash(cellText(value)));
-}
+// --- Rows pasted in Meta's own export order --------------------------------
 
-export const parseCustomerType = enumParser(Object.values(CustomerType), {
-  interior: CustomerType.INTERIOR_DESIGNER,
-  designer: CustomerType.INTERIOR_DESIGNER,
-  architect: CustomerType.INTERIOR_DESIGNER,
-  home: CustomerType.HOMEOWNER,
-  owner: CustomerType.HOMEOWNER,
-  individual: CustomerType.HOMEOWNER,
-  shop: CustomerType.RETAILER,
-  distributor: CustomerType.DEALER,
-  wholesaler: CustomerType.DEALER,
-  developer: CustomerType.BUILDER,
-});
+// Meta's lead export: id, created_time, ad_id, ad_name, adset_id, adset_name,
+// campaign_id, campaign_name, form_id, form_name, is_organic, platform, then
+// the form's questions, then its contact fields (full_name, phone_number, email, city…).
+const META_LEAD_ID = /^l:\d+$/;
+const META_FIXED_COLUMNS = 12;
+const META_PHONE = /^p:/i;
+
+/**
+ * A row pasted in Meta's export order under a sheet header in another order —
+ * e.g. "l:1770…, 2026-10-17T18:12:34+05:30, ag:…, …, Vipin Patidar, p:+9191…"
+ * under "Date, <questions>, full_name, phone_number, …". Returns the row's
+ * cells moved under the right headers: name, phone, email, city, the form's
+ * answers, created_time (under the Date column) and the ad id (under Ad ID,
+ * when the header has one). The other ad, campaign and form details are left
+ * out. Null when the row isn't one (cells are by column number, as the sheet shows them).
+ */
+export function realignMetaOrderRow(cells: CellInput[], mapping: HeaderMapping): Map<number, CellInput> | null {
+  const text = (col: number) => cellText(cells[col] ?? null);
+  if (!META_LEAD_ID.test(text(1))) return null;
+
+  const colOf = (field: ImportField) => [...mapping.fields].find(([, f]) => f === field)?.[0];
+  const phoneCol = colOf('phone');
+  // Already lined up with the header (a real Meta export header) — read as usual.
+  if (phoneCol !== undefined && META_PHONE.test(text(phoneCol))) return null;
+
+  let phoneAt = -1;
+  for (let col = META_FIXED_COLUMNS + 1; col < cells.length; col++) {
+    if (META_PHONE.test(text(col))) {
+      phoneAt = col;
+      break;
+    }
+  }
+  const nameCol = colOf('name');
+  if (phoneAt < 0 || phoneCol === undefined || nameCol === undefined) return null;
+
+  const aligned = new Map<number, CellInput>();
+  const put = (field: ImportField, value: CellInput | undefined) => {
+    const col = colOf(field);
+    if (col !== undefined && value !== undefined && value !== null && cellText(value) !== '') aligned.set(col, value);
+  };
+  put('name', cells[phoneAt - 1]);
+  put('phone', cells[phoneAt]);
+  put('enquiredAt', cells[2]);
+  put('adId', cells[3]); // Meta's ad id ("ag:…") — the only ad detail kept
+
+  let next = phoneAt + 1;
+  if (text(next).includes('@')) put('email', cells[next++]);
+  const city = text(next);
+  if (city && /\p{L}/u.test(city) && !city.includes('://') && city.length <= 60) put('city', cells[next]);
+
+  // The form's answers sit between platform and full_name, in the order the
+  // header lists its question columns (the header columns before the name
+  // column, other than the date). Matched only when the counts agree.
+  const answers = cells.slice(META_FIXED_COLUMNS + 1, phoneAt - 1);
+  const questionCols = [...mapping.headers.keys()]
+    .filter((col) => col < nameCol && mapping.fields.get(col) !== 'enquiredAt')
+    .sort((a, b) => a - b);
+  if (answers.length === questionCols.length) {
+    questionCols.forEach((col, i) => {
+      const value = answers[i];
+      if (value !== undefined && value !== null && cellText(value) !== '') aligned.set(col, value);
+    });
+  }
+  return aligned;
+}

@@ -1,8 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CustomerType, LeadSource } from '@prisma/client';
-import { Transform, Type } from 'class-transformer';
-import { IsEmail, IsEnum, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-import { MAX_MONEY } from '../../../common/utils/limits.util';
+import { LeadSource } from '@prisma/client';
+import { Transform } from 'class-transformer';
+import { IsDateString, IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export const MANUAL_LEAD_SOURCES = [LeadSource.MANUAL, LeadSource.WALK_IN, LeadSource.REFERRAL, LeadSource.OTHER] as const;
 
@@ -38,23 +37,32 @@ export class CreateLeadManualDto {
   @ApiProperty({ required: false, example: '452001' }) @IsOptional() @IsString() pincode?: string;
   @ApiProperty({ required: false, example: 'Siyaganj, Indore' }) @IsOptional() @IsString() address?: string;
 
-  @ApiProperty({ required: false, enum: CustomerType })
-  @IsOptional()
-  @IsEnum(CustomerType)
-  customerType?: CustomerType;
 
   @ApiProperty({ required: false, example: '18mm BWP 8x4, 50 sheets' })
   @IsOptional()
   @IsString()
   requirementNotes?: string;
 
-  @ApiProperty({ required: false, example: 85000 })
+  @ApiProperty({ required: false, example: 'Dealer / retailer', description: 'Who the plywood is for ("Buying For")' })
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MAX_MONEY)
-  estimatedValue?: number;
+  @IsString()
+  buyingFor?: string;
+
+  @ApiProperty({ required: false, example: '2026-09-16', description: 'The lead\'s date when it came in earlier than today (default: now)' })
+  @IsOptional()
+  @IsDateString()
+  date?: string;
+
+  @ApiProperty({ required: false, example: '120249746455520716', description: 'Meta ad id — Admin only, ignored for others' })
+  @IsOptional()
+  @IsString()
+  adId?: string;
+
+  @ApiProperty({ required: false, example: 'Call after 5 pm' })
+  @IsOptional()
+  @IsString()
+  feedback?: string;
+
 
   @ApiProperty({
     required: false,

@@ -1,8 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
-import { IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-import { MAX_MONEY } from '../../../common/utils/limits.util';
-import { CustomerType } from '@prisma/client';
+import { Transform } from 'class-transformer';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /** PATCH /leads/:id — the lead's own fields. Status and assignee have their own endpoints. */
 export class UpdateLeadDetailsDto {
@@ -18,14 +16,9 @@ export class UpdateLeadDetailsDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() city?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() pincode?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() address?: string;
-  @ApiProperty({ required: false, enum: CustomerType }) @IsOptional() @IsEnum(CustomerType) customerType?: CustomerType;
   @ApiProperty({ required: false }) @IsOptional() @IsString() requirementNotes?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() buyingFor?: string;
+  @ApiProperty({ required: false, description: 'Meta ad id — Admin only, ignored for others; empty clears it' }) @IsOptional() @IsString() adId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() feedback?: string;
 
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MAX_MONEY)
-  estimatedValue?: number;
 }

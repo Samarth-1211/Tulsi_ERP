@@ -23,10 +23,10 @@ import {
   mapHeaderRow,
   MAX_IMPORT_FILE_BYTES,
   MAX_IMPORT_ROWS,
-  parseAmount,
-  parseCustomerType,
+  parseDate,
   parseEmail,
   parsePhones,
+  realignMetaOrderRow,
   toRawValue,
 } from '../utils/lead-import.util';
 
@@ -38,7 +38,7 @@ export interface ImportIssue {
   message: string;
 }
 
-interface SheetRow {
+export interface SheetRow {
   /** The row number as Excel shows it. */
   rowNumber: number;
   values: Partial<Record<ImportField, CellInput>>;
@@ -46,14 +46,32 @@ interface SheetRow {
   raw: Record<string, string | number | boolean | null>;
 }
 
-interface ParsedSheet {
+export interface ParsedSheet {
   rows: SheetRow[];
   ignoredColumns: string[];
 }
 
-type LeadFields = Pick<
+export interface ReadRowsOptions {
+  maxRows?: number;
+  /** A header row with no leads under it yet is fine (a newly connected Google Sheet). */
+  allowEmpty?: boolean;
+}
+
+export type LeadFields = Pick<
   IngestInput,
-  'name' | 'phone' | 'altPhone' | 'email' | 'city' | 'pincode' | 'address' | 'customerType' | 'requirementNotes' | 'estimatedValue' | 'customFields'
+  | 'name'
+  | 'phone'
+  | 'altPhone'
+  | 'email'
+  | 'city'
+  | 'pincode'
+  | 'address'
+  | 'buyingFor'
+  | 'requirementNotes'
+  | 'feedback'
+  | 'enquiredAt'
+  | 'customFields'
+  | 'attribution'
 >;
 
 /** The row's numbers in E.164 — what duplicates are matched on. */
@@ -530,7 +548,8 @@ export class LeadImportService implements OnModuleInit {
 
   // --- Reading the file -----------------------------------------------------
 
-  private async parseFile(buffer: Buffer, ext: string): Promise<ParsedSheet> {
+  /** Also reads Google Sheets' CSV export (GoogleSheetSyncService), which has no row cap and may be empty. */
+  async parseFile(buffer: Buffer, ext: string, options: ReadRowsOptions = {}): Promise<ParsedSheet> {
     const workbook = new Workbook();
     let worksheets: Worksheet[];
     try {
@@ -552,7 +571,7 @@ export class LeadImportService implements OnModuleInit {
       const lastCandidate = Math.min(worksheet.rowCount, HEADER_SEARCH_ROWS);
       for (let r = 1; r <= lastCandidate; r++) {
         const mapping = mapHeaderRow(this.rowTexts(worksheet, r));
-        if (mapping) return this.readRows(worksheet, r, mapping);
+        if (mapping) return this.readRows(worksheet, r, mapping, options);
       }
     }
 
@@ -567,36 +586,47 @@ export class LeadImportService implements OnModuleInit {
     return cells;
   }
 
-  private readRows(worksheet: Worksheet, headerRow: number, mapping: HeaderMapping): ParsedSheet {
+  private readRows(worksheet: Worksheet, headerRow: number, mapping: HeaderMapping, { maxRows = MAX_IMPORT_ROWS, allowEmpty = false }: ReadRowsOptions): ParsedSheet {
     const rows: SheetRow[] = [];
+    // The last row holding only a date ("16/09/2026"): the enquiry date of the rows under it.
+    let dayHeading: CellInput = null;
 
     for (let r = headerRow + 1; r <= worksheet.rowCount; r++) {
       const values: SheetRow['values'] = {};
       const raw: SheetRow['raw'] = {};
-      let hasLeadData = false;
 
+      const cells: CellInput[] = [];
+      const byColumn = new Map<number, CellInput>();
       worksheet.getRow(r).eachCell((cell, col) => {
-        const value = cellInput(cell.value);
-        if (value === null) return;
+        cells[col] = cellInput(cell.value);
+        byColumn.set(col, cells[col]);
+      });
+      const aligned = realignMetaOrderRow(cells, mapping) ?? byColumn;
+      for (const [col, value] of aligned) {
+        if (value === null || value === undefined) continue;
         const header = mapping.headers.get(col);
         if (header) raw[header] = toRawValue(value);
         const field = mapping.fields.get(col);
-        if (field) {
-          values[field] = value;
-          hasLeadData = true;
-        }
-      });
+        if (field) values[field] = value;
+      }
 
-      if (!hasLeadData) continue; // blank line
+      const filled = Object.keys(values);
+      if (!filled.length) continue; // blank line
+      if (filled.length === 1 && values.enquiredAt !== undefined) {
+        if (parseDate(values.enquiredAt)) dayHeading = values.enquiredAt;
+        continue;
+      }
+      // No date of its own (or a serial number 1, 2, 3… in a "Date" column): the day heading's.
+      if (dayHeading !== null && (values.enquiredAt === undefined || !parseDate(values.enquiredAt))) values.enquiredAt = dayHeading;
       rows.push({ rowNumber: r, values, raw });
-      if (rows.length > MAX_IMPORT_ROWS) {
+      if (rows.length > maxRows) {
         throw new BadRequestException(
           `This file has more than ${MAX_IMPORT_ROWS.toLocaleString('en-IN')} leads — split it into smaller files and upload them one at a time.`,
         );
       }
     }
 
-    if (rows.length === 0) {
+    if (rows.length === 0 && !allowEmpty) {
       throw new BadRequestException('No leads found under the header row.');
     }
     return { rows, ignoredColumns: mapping.ignored };
@@ -775,7 +805,7 @@ export class LeadImportService implements OnModuleInit {
    * One row's lead fields. A missing/invalid name or mobile number rejects
    * the row; any other value that can't be used is left blank with a warning.
    */
-  private toLeadFields(row: SheetRow): { fields?: LeadFields; warnings: ImportIssue[]; error?: string } {
+  toLeadFields(row: SheetRow): { fields?: LeadFields; warnings: ImportIssue[]; error?: string } {
     const v = row.values;
     const warnings: ImportIssue[] = [];
     const warn = (message: string) => warnings.push({ row: row.rowNumber, level: 'warning', message });
@@ -811,7 +841,8 @@ export class LeadImportService implements OnModuleInit {
     for (const bad of invalid) warn(`Mobile No. "${bad}" isn’t a valid number — left out`);
     if (extraPhones.length) warn(`Only two mobile numbers are kept per lead — left out: ${extraPhones.join(', ')}`);
 
-    const remarks = text('remarks');
+    // Meta's ad id is written "ag:120249…" in its exports.
+    const adId = text('adId')?.replace(/^ag:/i, '').trim().slice(0, 100);
     return {
       warnings,
       fields: {
@@ -822,10 +853,11 @@ export class LeadImportService implements OnModuleInit {
         city: text('city'),
         pincode: text('pincode'),
         address: text('address'),
-        customerType: optional('customerType', 'Customer Type', parseCustomerType),
+        buyingFor: text('buyingFor')?.slice(0, 200),
         requirementNotes: text('requirementNotes'),
-        estimatedValue: optional('estimatedValue', 'Estimated Value', parseAmount),
-        customFields: remarks ? { remarks } : undefined,
+        feedback: text('feedback'),
+        enquiredAt: optional('enquiredAt', 'Date', parseDate),
+        attribution: adId ? { adId } : undefined,
       },
     };
   }

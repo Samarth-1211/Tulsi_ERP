@@ -1,6 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { AllotmentEligibility, AllotmentPriority } from '@prisma/client';
-import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+
+/** Priorities an org can pick — HIGHEST_VALUE is retired with lead value. */
+export const ALLOTMENT_PRIORITIES = Object.values(AllotmentPriority).filter((p) => p !== AllotmentPriority.HIGHEST_VALUE);
 
 export class UpdateTaskAllotmentSettingsDto {
   @ApiProperty({ required: false, description: 'Hand callers a batch of old leads once their day’s work is done' })
@@ -29,11 +32,6 @@ export class UpdateTaskAllotmentSettingsDto {
   @Max(60)
   autoAllotRestDays?: number;
 
-  @ApiProperty({ required: false, nullable: true, example: 500, description: 'Only leads with an estimated value of at least this; null = any lead' })
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  autoAllotMinValue?: number | null;
 
   @ApiProperty({ required: false, description: 'Also allot leads already marked LOST' })
   @IsOptional()
@@ -45,13 +43,13 @@ export class UpdateTaskAllotmentSettingsDto {
   @IsEnum(AllotmentEligibility)
   autoAllotEligibility?: AllotmentEligibility;
 
-  @ApiProperty({ required: false, enum: AllotmentPriority, description: 'Which leads are called first' })
+  @ApiProperty({ required: false, enum: ALLOTMENT_PRIORITIES, description: 'Which leads are called first' })
   @IsOptional()
-  @IsEnum(AllotmentPriority)
+  @IsIn(ALLOTMENT_PRIORITIES)
   autoAllotPriority?: AllotmentPriority;
 
-  @ApiProperty({ required: false, enum: AllotmentPriority, description: 'Tie-breaker when two leads rank the same' })
+  @ApiProperty({ required: false, enum: ALLOTMENT_PRIORITIES, description: 'Tie-breaker when two leads rank the same' })
   @IsOptional()
-  @IsEnum(AllotmentPriority)
+  @IsIn(ALLOTMENT_PRIORITIES)
   autoAllotThenBy?: AllotmentPriority;
 }

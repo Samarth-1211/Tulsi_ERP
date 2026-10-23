@@ -10,6 +10,8 @@ import { LeadImportService } from './services/lead-import.service';
 import { LeadImportStorageService } from './services/lead-import-storage.service';
 import { LeadIngestionService } from './services/lead-ingestion.service';
 import { LeadAssignmentService } from './services/lead-assignment.service';
+import { GoogleSheetSyncService } from './services/google-sheet-sync.service';
+import { GoogleSheetsApiService } from './services/google-sheets-api.service';
 import { EncryptionService } from '../../common/crypto/encryption.service';
 
 @Module({
@@ -24,8 +26,10 @@ import { EncryptionService } from '../../common/crypto/encryption.service';
     LeadImportStorageService,
     LeadIngestionService,
     LeadAssignmentService,
+    GoogleSheetSyncService,
+    GoogleSheetsApiService,
     EncryptionService,
   ],
-  exports: [LeadsService, LeadIngestionService, LeadAssignmentService, LeadAllocationService, LeadsWebhookService, LeadDedupService, LeadNotificationsService],
+  exports: [LeadsService, LeadIngestionService, LeadAssignmentService, LeadAllocationService, LeadsWebhookService, LeadDedupService, LeadNotificationsService, GoogleSheetSyncService, GoogleSheetsApiService],
 })
 export class LeadIngestionModule {}

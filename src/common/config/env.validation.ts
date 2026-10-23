@@ -1,3 +1,5 @@
+import { createPrivateKey } from 'crypto';
+
 /**
  * Runs once at startup (ConfigModule `validate`). A missing or unsafe setting
  * stops the app with a clear list instead of failing later at runtime — or
@@ -23,6 +25,19 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     }
     if (get('AUTO_VERIFY_NEW_USERS') === 'true') {
       console.warn('[env] AUTO_VERIFY_NEW_USERS=true in production: new accounts skip email verification.');
+    }
+  }
+
+  // Optional Google service account for private Google Sheet lead sources: both or neither.
+  const googleEmail = get('GOOGLE_SERVICE_ACCOUNT_EMAIL');
+  const googleKey = get('GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY').replace(/^"|"$/g, '').replace(/\\n/g, '\n');
+  if (!!googleEmail !== !!googleKey) {
+    problems.push('Set both GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY (client_email and private_key from the JSON key file), or neither.');
+  } else if (googleKey) {
+    try {
+      createPrivateKey(googleKey);
+    } catch {
+      problems.push('GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY is not a valid private key — paste private_key from the JSON key file, in double quotes, as it is.');
     }
   }
 

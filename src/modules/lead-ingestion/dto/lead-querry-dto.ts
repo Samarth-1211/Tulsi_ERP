@@ -1,17 +1,24 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { CustomerType, LeadSource, LeadStatus } from '@prisma/client';
+import { IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { LeadSource, LeadStatus } from '@prisma/client';
 
 /** GET /leads filters + pagination (page / pageSize, as in RCRM's team-member list). */
 export class LeadQueryDto {
   @ApiProperty({ required: false, enum: LeadStatus }) @IsOptional() @IsEnum(LeadStatus) status?: LeadStatus;
   @ApiProperty({ required: false, enum: LeadSource }) @IsOptional() @IsEnum(LeadSource) source?: LeadSource;
-  @ApiProperty({ required: false, enum: CustomerType }) @IsOptional() @IsEnum(CustomerType) customerType?: CustomerType;
   @ApiProperty({ required: false }) @IsOptional() @IsString() assignedToId?: string;
   @ApiProperty({ required: false, example: 'Indore' }) @IsOptional() @IsString() city?: string;
+  @ApiProperty({ required: false, description: 'Exact stored value (see GET /leads/filter-options)' }) @IsOptional() @IsString() buyingFor?: string;
+  @ApiProperty({ required: false, description: 'Exact stored value (see GET /leads/filter-options)' }) @IsOptional() @IsString() requirement?: string;
+  @ApiProperty({ required: false, description: 'Admin only: a Meta ad id, or "none" for leads without one' }) @IsOptional() @IsString() adId?: string;
+  @ApiProperty({ required: false, enum: ['newest', 'oldest', 'ad'], description: '"ad" (group by ad id) is Admin only' })
+  @IsOptional()
+  @IsIn(['newest', 'oldest', 'ad'])
+  sort?: 'newest' | 'oldest' | 'ad';
+  @ApiProperty({ required: false, enum: ['true', 'false'] }) @IsOptional() @IsIn(['true', 'false']) hasFeedback?: 'true' | 'false';
 
-  @ApiProperty({ required: false, example: '2026-10-01', description: 'createdAt from (inclusive)' })
+  @ApiProperty({ required: false, example: '2026-10-01', description: 'Lead date from (inclusive)' })
   @IsOptional()
   @IsDateString()
   from?: string;
